@@ -1,4 +1,3 @@
-from matplotlib.pyplot import show
 import torch
 import numpy as np
 from plotly import subplots

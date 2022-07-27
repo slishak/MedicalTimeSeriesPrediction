@@ -1,0 +1,8 @@
+torch
+xitorch
+torchdiffeq
+numpy
+scipy
+pandas
+plotly
+ipython
