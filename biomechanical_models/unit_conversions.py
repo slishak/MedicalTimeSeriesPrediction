@@ -10,6 +10,10 @@ class Unit:
     default: bool = False
 
 class Quantity:
+    """Class to represent a physical quantity (number with unit).
+
+    TODO: this could be massively simplified
+    """
     _units = {
         'pressure': [
             Unit('kPa', constants.kilo),
@@ -48,16 +52,39 @@ class Quantity:
     }
 
     def __init__(self, value: float, unit: str):
+        """Initialise. Internally converts to the "default" unit corresponding
+        to whatever unit is passed in
+
+        Args:
+            value (float): Number
+            unit (str): Unit of "value"
+        """
         self._original_value = value
         self._original_unit = unit
         self._quantity = None
         self.value, self._base_unit, self._quantity = self._convert(value, unit)
 
     def to(self, unit: str) -> float:
+        """Convert to a different unit
+
+        Args:
+            unit (str): Unit to convert to
+
+        Returns:
+            float: Converted value
+        """
         return self._convert(self.value, self._base_unit, unit)[0]
 
     @staticmethod
     def default_unit(conversions: list[Unit]) -> str:
+        """Find the default Unit out of a list of Units.
+
+        Args:
+            conversions (list[Unit]): list of Units
+
+        Returns:
+            str: Name of default Unit
+        """
         default_unit = None
         for unit in conversions:
             if unit.default:
@@ -69,6 +96,17 @@ class Quantity:
         return default_unit.name
 
     def _conversion_factor(self, conversions: list[Unit], old_unit: str, new_unit: str) -> float:
+        """Conversion factor from old_unit to new_unit
+
+        Args:
+            conversions (list[Unit]): List of Units containing old_unit and 
+                new_unit
+            old_unit (str): Old unit
+            new_unit (str): New unit
+
+        Returns:
+            float: Conversion factor from old_unit to new_unit
+        """
         if new_unit is None:
             new_unit = self.default_unit(conversions)
 
@@ -94,6 +132,21 @@ class Quantity:
         old_unit: str, 
         new_unit: Optional[str] = None
     ) -> tuple[float, str, str]:
+        """Convert a value from an old to new unit
+
+        Args:
+            value (float): Number
+            old_unit (str): Old unit
+            new_unit (Optional[str], optional): New unit. Defaults to None, in 
+                which case the default will be found and used.
+
+
+        Returns:
+            Tuple containing:
+            - converted_value (float): New number
+            - new_unit (str): New unit
+            - quantity (str): Type of quantity (e.g. volume)
+        """
 
         if self._quantity is None:
             for quantity, conversions in self._units.items():
@@ -117,6 +170,21 @@ class Quantity:
 
 
 def convert(value: float, unit: Optional[str] = None, to: Optional[str] = None) -> float:
+    """Convert a value from one unit to another. At least one of `unit`
+    and `to` must be set. If they are both set, they must both be units 
+    representing the same quantity (i.e. there must be a dimensionless 
+    multiplier to convert from one to the other).
+
+    Args:
+        value (float): Value to convert
+        unit (Optional[str], optional): Units of value. Defaults to None, in 
+            which case it is assumed to be in the global default units.
+        to (Optional[str], optional): Unit to convert to. Defaults to None, in
+            which case the value is converted to the global default units.
+
+    Returns:
+        float: Converted value
+    """
     if unit is None:
         if to is None:
             raise Exception
