@@ -1,7 +1,7 @@
 from time import perf_counter
 import warnings
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Union
 
 import torch
 import pandas as pd
@@ -30,7 +30,9 @@ warnings.simplefilter('error', ConvergenceWarning)
 
 @dataclass
 class PassiveRespiratorySystem(ODEBase):
-    """Jallon passive mechanical respiratory system"""
+    """Passive mechanical respiratory system
+    
+    (Jallon, 2009)"""
 
     state_names: ClassVar[list[str]] = ['p_mus', 'v_alv']
 
@@ -38,13 +40,36 @@ class PassiveRespiratorySystem(ODEBase):
         self, 
         e_alv: float = convert(5, 'cmH2O/l'),
         e_cw: float = convert(4, 'cmH2O/l'),
-        r_ua: float = convert(5, 'cmH2O s/l'),  # Wrong units in Jallon paper (cmH2O/l)
-        r_ca: float = convert(1, 'cmH2O s/l'),  # Wrong units in Jallon paper (cmH2O/l)
-        v_th0: float = convert(2, 'l'),  # Wrong units in Jallon paper (1/l)
-        lam: float = convert(1.5, 'mmHg'),  # Units not given in Jallon; actually mmHg/s
-        mu: float = convert(1.0, 'mmHg'),  # Units not given in Jallon; actually mmHg/s ***1.08504***
-        beta: float = 0.1,  # Manually added parameter to control drift (1/s)
+        r_ua: float = convert(5, 'cmH2O s/l'),
+        r_ca: float = convert(1, 'cmH2O s/l'),
+        v_th0: float = convert(2, 'l'),
+        lam: float = convert(1.5, 'mmHg'),
+        mu: float = convert(1.0, 'mmHg'),  # 1.08504
+        beta: float = 0.1,
     ):
+        """Initialise
+
+        Args:
+            e_alv (float, optional): Alveolar elastance. Defaults to 5 cmH2O/l
+            e_cw (float, optional): Chest wall elastance. Defaults to 4 cmH2O/l
+            r_ua (float, optional): Upper airways resistance. Defaults to 
+                5 cmH2O s/l. Note: Jallon gives incorrect units of cmH2O/l
+            r_ca (float, optional): Central airways resistance. Defaults to 
+                1 cmH2O s/l. Note: Jallon gives incorrect units of cmH2O/l
+            v_th0 (float, optional): Rib cage or intrathoracic volume at zero
+                pressure. Defaults to 2 l. Note: Jallon gives incorrect units 
+                of 1/l.
+            lam (float, optional): Positive constant to allow pleural pressure
+                to be set at physiological values. Defaults to 1.5 mmHg/s. 
+                Note: units not given in Jallon, assumed mmHg/s.
+            mu (float, optional): Offset to respiratory muscle pressure 
+                derivative with time. Defaults to 1 mmHg/s. Note that with this
+                implementation, a value of 1.08504 gives steady state
+                behaviour.
+            beta (float, optional): Integral control on respiratory muscle 
+                pressure to keep it at constant mean (prevents drift). 
+                Modification original in this work. Defaults to 0.1/s
+        """
         super().__init__()
         self.e_alv = nn.Parameter(torch.as_tensor(e_alv), requires_grad=False)
         self.e_cw = nn.Parameter(torch.as_tensor(e_cw), requires_grad=False)
@@ -55,7 +80,16 @@ class PassiveRespiratorySystem(ODEBase):
         self.mu = nn.Parameter(torch.as_tensor(mu), requires_grad=False)
         self.beta = nn.Parameter(torch.as_tensor(beta), requires_grad=False)
 
-    def model(self, t: torch.Tensor, states: torch.Tensor) -> dict[str, torch.Tensor]:
+    def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Passive respiratory model implementation
+
+        Args:
+            t (torch.Tensor): Time (s)
+            states (torch.Tensor): Model states
+
+        Returns:
+            dict[str, torch.Tensor]: Model outputs
+        """
 
         # These are not states of this model, but states of the overall system
         y = states['y']
@@ -82,11 +116,17 @@ class PassiveRespiratorySystem(ODEBase):
 
 
 class SmithCardioVascularSystem(ODEBase):
-    """Smith CVS model with no inertia and Heaviside valve law"""
+    """Smith CVS model with no inertia and Heaviside valve law
+    
+    (Smith, 2004) and (Hann, 2004)"""
 
     state_names: ClassVar[list[str]] = ['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv']
 
     def __init__(self, *args, **kwargs):
+        """Initialise. All parameters passed to nn.Module. 
+
+        Default parameter values from Smith, 2005.
+        """
         super().__init__(*args, **kwargs)
 
         # Valves
@@ -131,10 +171,29 @@ class SmithCardioVascularSystem(ODEBase):
         self._v_spt_scale = nn.Parameter(torch.tensor(1.0), requires_grad=False)
 
     def callback_accept_step(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor):
+        """Called by torchdiffeq at the end of a successful step. Used to 
+        build outputs (irregularly-spaced grid) in self.trajectory.
+
+        Stores last value of v_spt for use as initial guess in next step.
+
+        Args:
+            t (torch.Tensor): Time (s)
+            x (torch.Tensor): ODE state tensor
+            dt (torch.Tensor): Time step (s)
+        """
         super().callback_accept_step(t, x, dt)
         self._v_spt_old = self.trajectory[-1][3]['v_spt']
 
-    def model(self, t: torch.Tensor, states: torch.Tensor) -> dict[str, torch.Tensor]:
+    def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Model implementation
+
+        Args:
+            t (torch.Tensor): Time (s)
+            states (dict[str, torch.Tensor]): Model states
+
+        Returns:
+            dict[str, torch.Tensor]: Model outputs
+        """
 
         # t1 = perf_counter()
 
@@ -148,6 +207,12 @@ class SmithCardioVascularSystem(ODEBase):
         return outputs
 
     def flow_rates(self, outputs: dict[str, torch.Tensor]):
+        """Compute flow rates from pressures and add to output dict.
+
+        Args:
+            outputs (dict[str, torch.Tensor]): Partial model outputs containing
+                pressures
+        """
         outputs['q_mt'] = self.mt.flow_rate(outputs['p_pu'], outputs['p_lv'])
         outputs['q_av'] = self.av.flow_rate(outputs['p_lv'], outputs['p_ao'])
         outputs['q_tc'] = self.tc.flow_rate(outputs['p_vc'], outputs['p_rv'])
@@ -156,6 +221,14 @@ class SmithCardioVascularSystem(ODEBase):
         outputs['q_sys'] = self.sys.flow_rate(outputs['p_ao'], outputs['p_vc'])
 
     def derivatives(self, states: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor]):
+        """Compute volume derivatives from flow rates and add to output dict.
+
+        Args:
+            states (dict[str, torch.Tensor]): Model states (unused in this 
+                model)
+            outputs (dict[str, torch.Tensor]): Partial model outputs containing
+                flow rates
+        """
 
         # Chamber volume changes
         # Explicitly defined in Smith 2007, Fig. 1, C17-C22
@@ -166,10 +239,23 @@ class SmithCardioVascularSystem(ODEBase):
         outputs['dv_vc_dt'] = outputs['q_sys'] - outputs['q_tc']
         outputs['dv_rv_dt'] = outputs['q_tc'] - outputs['q_pv']
 
-    def pressures_volumes(self, t: torch.Tensor, states: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Equation numbers from Smith 2004 (or 2007 if explicitly stated).
+    def pressures_volumes(
+        self, 
+        t: torch.Tensor, 
+        states: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        """Compute pressures and volumes of cardiovascular model.
+        
+        Equation numbers from Smith 2004 (or 2007 if explicitly stated).
 
-        Laid out as per Fig. 1, Smith 2007
+        See Smith 2007, Fig. 1 for a general overview.
+
+        Args:
+            t (torch.Tensor): Time (s)
+            states (dict[str, torch.Tensor]): Model states
+
+        Returns:
+            dict[str, torch.Tensor]: Pressure/volume outputs
         """
 
         # Pericardium pressure-volume relationship
@@ -191,9 +277,9 @@ class SmithCardioVascularSystem(ODEBase):
         # Eq. 9, 10, 16
         v_lvf = states['v_lv'] - v_spt
         v_rvf = states['v_rv'] + v_spt
-        p_lvf = e_t * self.lvf.p_es(v_lvf) + (1 - e_t) * self.lvf.p_ed(v_lvf)
-        p_rvf = e_t * self.rvf.p_es(v_rvf) + (1 - e_t) * self.rvf.p_ed(v_rvf)
-        p_spt = e_t * self.spt.p_es(v_spt) + (1 - e_t) * self.spt.p_ed(v_spt)
+        p_lvf = self.lvf.p_es(v_lvf, e_t) 
+        p_rvf = self.rvf.p_es(v_rvf, e_t)
+        p_spt = self.spt.p_es(v_spt, e_t)
 
         # Eq. 12, 13
         p_lv = p_lvf + p_peri
@@ -245,6 +331,18 @@ class SmithCardioVascularSystem(ODEBase):
         t_final: float, 
         resolution: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Simulate cardiovascular model. Returns regularly spaced time and 
+        state tensors. Irregularly spaced outputs available in self.trajectory.
+
+        Args:
+            t_final (float): Final time (s)
+            resolution (int): State output resolution (Hz)
+
+        Returns:
+            Tuple containing:
+            - t (torch.Tensor): Time tensor
+            - sol (torch.Tensor): State tensor
+        """
 
         super().simulate(t_final, resolution)
         
@@ -273,6 +371,227 @@ class SmithCardioVascularSystem(ODEBase):
 
         return t, sol
 
+    def solve_v_spt(
+        self, 
+        v_lv: torch.Tensor, 
+        v_rv: torch.Tensor, 
+        e_t: torch.Tensor,
+        method: str = 'newton',
+        rtol: float = 1e-5,
+        xtol: float = 1e-6,
+    ) -> torch.Tensor:
+        """Find value for v_spt using root finding algorithm.
+
+        TODO: Remove all algorithms other than Newton-Raphson.
+
+        Args:
+            v_lv (torch.Tensor): Left ventricle volume
+            v_rv (torch.Tensor): Right ventricle volume
+            e_t (torch.Tensor): Cardiac driver function
+            method (str): Root finding algorithm. Defaults to 'newton', which 
+                is implemented in-line for simplicity. Also available: 
+                'xitorch', 'scipy'.
+            xtol (float): Absolute tolerance for v_spt. Defaults to 1e-5.
+            rtol (float): Relative tolerance for v_spt. Defaults to 1e-6.
+
+        Returns:
+            torch.Tensor: v_spt solution
+        """
+
+        # No explicit solution for v_spt, need to use root finder
+        if method == 'xitorch':
+            f_tol = 1e-5
+            try:
+                v_spt_scaled = rootfinder(
+                    self.v_spt_residual, 
+                    torch.tensor([self._v_spt_old]), 
+                    params=(v_lv, v_rv, e_t, self), 
+                    method='broyden1', 
+                    x_tol=xtol, 
+                    f_tol=f_tol,
+                )
+            except (ValueError, ConvergenceWarning):
+                # Retry with a different method
+                # TODO: fix xitorch
+                v_spt_scaled = rootfinder(
+                    self.v_spt_residual, 
+                    torch.tensor([self._v_spt_old]), 
+                    params=(v_lv, v_rv, e_t, self), 
+                    method='linearmixing', 
+                    x_tol=xtol, 
+                    f_tol=f_tol,
+                )
+        elif method == 'newton':
+            v_spt = self._v_spt_old
+            i = 0
+            while True:
+                i += 1
+                res, grad = self.v_spt_residual_analytical(v_spt, v_lv, v_rv, e_t, self)
+                dv = res / grad
+                v_spt = v_spt - dv
+                step_abs = dv.abs()
+                if step_abs < rtol * v_spt.abs():
+                    # Rel tol
+                    break
+                if step_abs < xtol:
+                    # Abs tol
+                    break
+                
+            # print(f'Iterations: {i}')
+            v_spt_scaled = v_spt
+        elif method == 'scipy':
+
+            sol = root_scalar(
+                self.v_spt_residual, 
+                (v_lv, v_rv, e_t, self), 
+                x0=self._v_spt_old, 
+                method='newton', 
+                xtol=xtol,
+                rtol=rtol,
+                fprime=True,
+            )
+
+            if not sol.converged:
+                raise Exception
+
+            v_spt_scaled = sol.root
+        else:
+            raise NotImplementedError(method)
+            
+        v_spt = v_spt_scaled / self._v_spt_scale
+        return v_spt
+
+    @staticmethod
+    def v_spt_residual_analytical(
+        v_spt_in: torch.Tensor,
+        v_lv: torch.Tensor,
+        v_rv: torch.Tensor,
+        e_t: torch.Tensor,
+        cvs: "SmithCardioVascularSystem"
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Residual function for v_spt, with analytic derivative.
+        
+        See Smith 2004, Eq. 20
+
+        Implemented as static method as xitorch requires a pure function
+
+        TODO: if we don't use xitorch, can use normal method
+
+        Args:
+            v_spt_in (torch.Tensor): Current scaled value of v_spt from 
+                root finding algorithm
+            v_lv (torch.Tensor): Left ventricle volume
+            v_rv (torch.Tensor): Right ventricle volume
+            e_t (torch.Tensor): Cardiac driver function
+            cvs (SmithCardioVascularSystem): self
+
+        Returns:
+            Tuple containing:
+            - res (torch.Tensor): Residual
+            - grad (torch.Tensor): Gradient of residual wrt scaled v_spt
+        """
+
+        v_spt = v_spt_in/cvs._v_spt_scale
+
+        # Free wall volumes v_(lvf/rvf/spt) are not physical volumes, but 
+        # defined to capture deflection of cardiac free walls relative to 
+        # ventricle volumes
+        # Eq. 9, 10
+        v_lvf = v_lv - v_spt
+        v_rvf = v_rv + v_spt
+
+        # Eq. 15, 16, 17
+        res = cvs.spt.p(v_spt, e_t) - cvs.lvf.p(v_lvf, e_t) + cvs.rvf.p(v_rvf, e_t)
+
+        # Analytical gradient of residual wrt v_spt
+        grad = cvs.lvf.dp_dv(v_lvf, e_t) + cvs.rvf.dp_dv(v_rvf, e_t) + cvs.spt.dp_dv(v_spt, e_t)
+
+        return res, grad
+
+    @staticmethod
+    def v_spt_residual(
+        v_spt_in: float,
+        v_lv: torch.Tensor,
+        v_rv: torch.Tensor,
+        e_t: torch.Tensor,
+        cvs: "SmithCardioVascularSystem", 
+        verbose: bool = False, 
+        deriv: bool = True,
+    ) -> Union[float, tuple[float, float]]:
+        """Residual function for v_spt, with derivative computed by PyTorch.
+
+        Returns floats rather than torch.Tensor (c.f. v_spt_residual_analytical)
+
+        # TODO: Delete this method
+
+        See Smith 2004, Eq. 20
+
+        Args:
+            v_spt_in (torch.Tensor): Current scaled value of v_spt from 
+                root finding algorithm
+            v_lv (torch.Tensor): Left ventricle volume
+            v_rv (torch.Tensor): Right ventricle volume
+            e_t (torch.Tensor): Cardiac driver function
+            cvs (SmithCardioVascularSystem): self
+            verbose (bool, optional): Print progress. Defaults to False.
+            deriv (bool, optional): Enable derivative output. Defaults to True.
+
+        Returns:
+            If deriv=False, then a single float (residual)
+            Otherwise, a tuple containing:
+            - res (float): Residual
+            - grad (float): Gradient of residual wrt scaled v_spt
+        """
+
+        # t1 = perf_counter()
+
+        v_spt_in = torch.as_tensor(v_spt_in)
+        v_spt_in.requires_grad_(deriv)
+
+        if deriv and v_spt_in.grad is not None:
+            v_spt_in.grad.zero_()
+
+        v_spt = v_spt_in/cvs._v_spt_scale
+
+        # Free wall volumes v_(lvf/rvf/spt) are not physical volumes, but 
+        # defined to capture deflection of cardiac free walls relative to 
+        # ventricle volumes
+        # Eq. 9, 10
+        v_lvf = v_lv - v_spt
+        v_rvf = v_rv + v_spt
+
+        # Eq. 16, 17
+        p_lvf = cvs.lvf.p_es(v_lvf, e_t)
+        p_rvf = cvs.rvf.p_es(v_rvf, e_t)
+        p_spt = cvs.spt.p_es(v_spt, e_t)
+
+        # Eq. 15
+        p_spt_rhs = p_lvf - p_rvf
+
+        # Residual between Eq. 15 and 17
+        res = p_spt - p_spt_rhs
+
+        if deriv:
+            res.backward()
+            grad = v_spt_in.grad.detach()
+            v_spt_in.requires_grad_(False)
+        
+            if verbose:
+                print(f'x={v_spt*1e3}, res={res}, grad={grad}')
+
+            out = (res.detach().item(), grad.detach().item())
+
+            # t2 = perf_counter()
+            # print(f'solve fn: {t2-t1:.2e}s')
+            
+            return out
+        else:
+            
+            if verbose:
+                print(f'x={v_spt*1e3}, res={res}')
+
+            return res.detach().item()
+
     def solve_v_spt_linearised(
         self, 
         v_lv: torch.Tensor, 
@@ -280,6 +599,24 @@ class SmithCardioVascularSystem(ODEBase):
         e_t: torch.Tensor, 
         method: str = 'jallon',
     ):
+        """Linearised solutions to v_spt - not used here as the full nonlinear
+        model converges in 1-2 iterations with a good initial guess from the
+        previous timestep.
+
+        (Hann, 2004) and (Jallon, 2009)
+
+        TODO: Delete this method
+
+        Args:
+            v_lv (torch.Tensor): Left ventricle volume
+            v_rv (torch.Tensor): Right ventricle volume
+            e_t (torch.Tensor): Cardiac driver function
+            method (str, optional): Linearisation method. Defaults to 'jallon'.
+                Also 'hann'
+
+        Raises:
+            NotImplementedError
+        """
         # Linearised solutions - not used
         raise NotImplementedError
 
@@ -303,8 +640,8 @@ class SmithCardioVascularSystem(ODEBase):
             )
             v_spt = num / den
 
-        elif method == 'smith':
-            # Smith 2005 method
+        elif method == 'hann':
+            # Hann 2004 method
             del_v_spt = convert(0.1, 'ml')
             x_1 = self._v_spt_old + del_v_spt
             x_2 = self._v_spt_old - del_v_spt
@@ -339,180 +676,21 @@ class SmithCardioVascularSystem(ODEBase):
         # self._v_spt_old = v_spt
         return v_spt
 
-    def solve_v_spt(
-        self, 
-        v_lv: torch.Tensor, 
-        v_rv: torch.Tensor, 
-        e_t: torch.Tensor,
-    ) -> torch.Tensor:
-
-        # No explicit solution for v_spt, need to use root finder
-        if USE_XITORCH:
-            x_tol = 1e-3
-            f_tol = 1e-5
-            try:
-                self._v_spt_old = rootfinder(
-                    self.v_spt_residual, 
-                    torch.tensor([self._v_spt_old]), 
-                    params=(v_lv, v_rv, e_t, self), 
-                    method='broyden1', 
-                    x_tol=x_tol, 
-                    f_tol=f_tol,
-                )
-            except (ValueError, ConvergenceWarning):
-                # Retry with a different method
-                # TODO: fix xitorch
-                self._v_spt_old = rootfinder(
-                    self.v_spt_residual, 
-                    torch.tensor([self._v_spt_old]), 
-                    params=(v_lv, v_rv, e_t, self), 
-                    method='linearmixing', 
-                    x_tol=x_tol, 
-                    f_tol=f_tol,
-                )
-        else:
-            # t1 = perf_counter()
-            # sol = root_scalar(
-            #     self.v_spt_residual, 
-            #     (v_lv, v_rv, e_t, self), 
-            #     x0=self._v_spt_old, 
-            #     method='newton', 
-            #     xtol=1e-5,
-            #     rtol=1e-3,
-            #     fprime=True,
-            # )
-            # if not sol.converged:
-            #     raise Exception
-
-            v_spt = self._v_spt_old
-            i = 0
-            while True:
-                i += 1
-                res, grad = self.v_spt_residual_analytical(v_spt, v_lv, v_rv, e_t, self)
-                dv = res / grad
-                v_spt = v_spt - dv
-                step_abs = dv.abs()
-                if step_abs < 1e-5 * v_spt.abs():
-                    # Rel tol
-                    break
-                if step_abs < 1e-6:
-                    # Abs tol
-                    break
-                
-            # print(f'Iterations: {i}')
-            self._v_spt_old = v_spt
-            # t2 = perf_counter()
-            # print(f'solve inner: {t2-t1:.2e}s, {sol.function_calls} calls')
-
-        # v_spt = self._v_spt_old / self._v_spt_scale
-        return v_spt
-
-    @staticmethod
-    def v_spt_residual_analytical(
-        v_spt_in: torch.Tensor,
-        v_lv: torch.Tensor,
-        v_rv: torch.Tensor,
-        e_t: torch.Tensor,
-        cvs: "SmithCardioVascularSystem"
-    ) -> torch.Tensor:
-
-        # Implemented as static method as xitorch requires a pure function
-        # TODO: if we don't use xitorch, can use normal method
-
-        v_spt = v_spt_in/cvs._v_spt_scale
-
-        # Free wall volumes v_(lvf/rvf/spt) are not physical volumes, but 
-        # defined to capture deflection of cardiac free walls relative to 
-        # ventricle volumes
-        # Eq. 9, 10
-        v_lvf = v_lv - v_spt
-        v_rvf = v_rv + v_spt
-
-        # Eq. 16, 17
-        p_lvf = e_t * cvs.lvf.p_es(v_lvf) + (1 - e_t) * cvs.lvf.p_ed(v_lvf)
-        p_rvf = e_t * cvs.rvf.p_es(v_rvf) + (1 - e_t) * cvs.rvf.p_ed(v_rvf)
-        p_spt = e_t * cvs.spt.p_es(v_spt) + (1 - e_t) * cvs.spt.p_ed(v_spt)
-
-        # Eq. 15
-        p_spt_rhs = p_lvf - p_rvf
-
-        # Residual between Eq. 15 and 17
-        res = p_spt - p_spt_rhs
-
-        dp_dv_lvf = e_t * cvs.lvf.dp_es_dv(v_lvf) + (1 - e_t) * cvs.lvf.dp_ed_dv(v_lvf)
-        dp_dv_rvf = e_t * cvs.rvf.dp_es_dv(v_rvf) + (1 - e_t) * cvs.rvf.dp_ed_dv(v_rvf)
-        dp_dv_spt = e_t * cvs.spt.dp_es_dv(v_spt) + (1 - e_t) * cvs.spt.dp_ed_dv(v_spt)
-
-        grad = dp_dv_lvf + dp_dv_rvf + dp_dv_spt
-
-        return res, grad
-
-    @staticmethod
-    def v_spt_residual(
-        v_spt_in: float,
-        v_lv: torch.Tensor,
-        v_rv: torch.Tensor,
-        e_t: torch.Tensor,
-        cvs: "SmithCardioVascularSystem", 
-        verbose: bool = False, 
-        deriv: bool = True,
-    ) -> float:
-        """Broken-down implementation of Eq. 20 (Smith 2004)"""
-
-        # t1 = perf_counter()
-
-        v_spt_in = torch.as_tensor(v_spt_in)
-        v_spt_in.requires_grad_(deriv)
-
-        if deriv and v_spt_in.grad is not None:
-            v_spt_in.grad.zero_()
-
-        v_spt = v_spt_in/cvs._v_spt_scale
-
-        # Free wall volumes v_(lvf/rvf/spt) are not physical volumes, but 
-        # defined to capture deflection of cardiac free walls relative to 
-        # ventricle volumes
-        # Eq. 9, 10
-        v_lvf = v_lv - v_spt
-        v_rvf = v_rv + v_spt
-
-        # Eq. 16, 17
-        p_lvf = e_t * cvs.lvf.p_es(v_lvf) + (1 - e_t) * cvs.lvf.p_ed(v_lvf)
-        p_rvf = e_t * cvs.rvf.p_es(v_rvf) + (1 - e_t) * cvs.rvf.p_ed(v_rvf)
-        p_spt = e_t * cvs.spt.p_es(v_spt) + (1 - e_t) * cvs.spt.p_ed(v_spt)
-
-        # Eq. 15
-        p_spt_rhs = p_lvf - p_rvf
-
-        # Residual between Eq. 15 and 17
-        res = p_spt - p_spt_rhs
-
-        if deriv:
-            res.backward()
-            grad = v_spt_in.grad.detach()
-            v_spt_in.requires_grad_(False)
-        
-            if verbose:
-                print(f'x={v_spt*1e3}, res={res}, grad={grad}')
-
-            out = (res.detach().item(), grad.detach().item())
-
-            # t2 = perf_counter()
-            # print(f'solve fn: {t2-t1:.2e}s')
-            
-            return out
-        else:
-            
-            if verbose:
-                print(f'x={v_spt*1e3}, res={res}')
-
-            return res.detach().item()
-
 class InertialSmithCVS(SmithCardioVascularSystem):
+    """Smith CVS model with inertia and Heaviside valve law
     
-    state_names: ClassVar[list[str]] = ['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv', 'q_mt', 'q_av', 'q_tc', 'q_pv']
+    (Smith, 2004), (Hann, 2004) and (Paeme, 2011)"""
+    
+    state_names: ClassVar[list[str]] = [
+        'v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv', 
+        'q_mt', 'q_av', 'q_tc', 'q_pv',
+    ]
 
     def __init__(self, *args, **kwargs):
+        """Initialise. All parameters passed to nn.Module. 
+
+        Default parameter values from Paeme, 2011.
+        """
         super().__init__(*args, **kwargs)
         # Mitral valve
         self.mt = InertialValve(convert(0.0158, 'mmHg s/ml'), convert(7.6967e-5, 'mmHg s^2/ml'))
@@ -528,6 +706,14 @@ class InertialSmithCVS(SmithCardioVascularSystem):
             self.load_state_dict(parameters.paeme_2011_cvs)
 
     def derivatives(self, states: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor]):
+        """Compute volume derivatives from flow rates and add to output dict.
+
+        Args:
+            states (dict[str, torch.Tensor]): Model states (unused in this 
+                model)
+            outputs (dict[str, torch.Tensor]): Partial model outputs containing
+                flow rates
+        """
         super().derivatives(states, outputs)
         outputs['dq_mt_dt'] = self.mt.flow_rate_deriv(outputs['p_pu'], outputs['p_lv'], states['q_mt'])
         outputs['dq_av_dt'] = self.av.flow_rate_deriv(outputs['p_lv'], outputs['p_ao'], states['q_av'])
@@ -535,6 +721,15 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         outputs['dq_pv_dt'] = self.pv.flow_rate_deriv(outputs['p_rv'], outputs['p_pa'], states['q_pv'])
 
     def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Model implementation
+
+        Args:
+            t (torch.Tensor): Time (s)
+            states (dict[str, torch.Tensor]): Model states
+
+        Returns:
+            dict[str, torch.Tensor]: Model outputs
+        """
 
         outputs = self.pressures_volumes(t, states)
         self.flow_rates(outputs)
@@ -547,6 +742,14 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         return outputs
 
     def flow_rates(self, outputs: dict[str, torch.Tensor], static: bool = False):
+        """Compute flow rates from pressures and add to output dict.
+
+        Args:
+            outputs (dict[str, torch.Tensor]): Partial model outputs containing
+                pressures
+            static (bool): Don't consider inertia in valve laws, just compute
+                static solution. Defaults to False.
+        """
         if static:
             super().flow_rates(outputs)
         else:
@@ -554,8 +757,22 @@ class InertialSmithCVS(SmithCardioVascularSystem):
             outputs['q_sys'] = self.sys.flow_rate(outputs['p_ao'], outputs['p_vc'])
 
     def simulate(self, t_final: float, resolution: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Simulate cardiovascular model. Returns regularly spaced time and 
+        state tensors. Irregularly spaced outputs available in self.trajectory.
 
-        super().simulate(t_final, resolution)
+        Args:
+            t_final (float): Final time (s)
+            resolution (int): State output resolution (Hz)
+
+        Returns:
+            Tuple containing:
+            - t (torch.Tensor): Time tensor
+            - sol (torch.Tensor): State tensor
+        """
+
+        # TODO: fix inheritance so can just call super() here. Create method to define
+        # initial conditions?
+        self.trajectory = []
 
         # Matlab
         states = {
@@ -589,6 +806,10 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         return t, sol
 
 class JallonHeartLungs(ODEBase):
+    """Jallon model of heart and lungs (combined cardiovascular and 
+    respiratory model). Uses simple valve law with no inertia.
+    
+    (Jallon, 2009)"""
 
     state_names: ClassVar[list[str]] = (
         SmithCardioVascularSystem.state_names + 
@@ -596,13 +817,17 @@ class JallonHeartLungs(ODEBase):
         RespiratoryPatternGenerator.state_names
     )
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        """Initialise. All parameters passed to nn.Module. 
+
+        Default parameters from Smith (2007) with modifications from 
+        Jallon (2009)
+        """
+
+        super().__init__(*args, **kwargs)
         self.resp_pattern = RespiratoryPatternGenerator()
         self.resp = PassiveRespiratorySystem()
         self.cvs = SmithCardioVascularSystem()
-
-        self.store = []
 
         # Jallon CVS model modifications
         with torch.no_grad():
@@ -616,10 +841,31 @@ class JallonHeartLungs(ODEBase):
             self.cvs.p_pl_affects_pu_and_pa.copy_(torch.tensor(True))
 
     def callback_accept_step(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor):
+        """Called by torchdiffeq at the end of a successful step. Used to 
+        build outputs (irregularly-spaced grid) in self.trajectory.
+
+        Stores last value of v_spt for use as initial guess in next step.
+
+        Args:
+            t (torch.Tensor): Time (s)
+            x (torch.Tensor): ODE state tensor
+            dt (torch.Tensor): Time step (s)
+        """
         super().callback_accept_step(t, x, dt)
         self.cvs._v_spt_old = self.trajectory[-1][3]['v_spt']
 
     def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Model implementation. Just consists of calling the lower-level 
+        models and passing parameters between. See Figure 5 from Jallon (2009)
+        for schematic.
+
+        Args:
+            t (torch.Tensor): Time (s)
+            states (torch.Tensor): Model states
+
+        Returns:
+            dict[str, torch.Tensor]: Model outputs
+        """
 
         # print(t)
         # print(states)
@@ -641,11 +887,21 @@ class JallonHeartLungs(ODEBase):
 
         all_outputs = states | resp_outputs | cvs_outputs | resp_pattern_outputs
 
-        self.store.append((t, states, all_outputs))
-
         return all_outputs
 
     def simulate(self, t_final: float, resolution: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Simulate Jallon heart/lung model. Returns regularly spaced time and 
+        state tensors. Irregularly spaced outputs available in self.trajectory.
+
+        Args:
+            t_final (float): Final time (s)
+            resolution (int): State output resolution (Hz)
+
+        Returns:
+            Tuple containing:
+            - t (torch.Tensor): Time tensor
+            - sol (torch.Tensor): State tensor
+        """
         
         super().simulate(t_final, resolution)
 
