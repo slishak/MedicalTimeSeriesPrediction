@@ -1,0 +1,12 @@
+.vscode/*
+
+# Python
+*.pyc
+*.pkl
+
+# Matlab
+*.asv
+*.m
+
+# Plots
+*.html
