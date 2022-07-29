@@ -1,5 +1,3 @@
-
-
 import numpy as np
 import torch
 from scipy.integrate import solve_ivp
@@ -7,10 +5,6 @@ from numpy.typing import ArrayLike
 
 from biomechanical_models.models import SmithCardioVascularSystem, InertialSmithCVS, JallonHeartLungs
 
-# import settings
-
-# Coupled Van der Pol oscillators
-#         (2.0, 0.8, 0.3, 0.2, 0.5),
 def vdp(
     t: float, 
     state: ArrayLike, 
@@ -19,7 +13,23 @@ def vdp(
     B: float = 0.5, 
     omega_1: float = 0.2, 
     omega_2: float = 0.3,
-) -> ArrayLike:
+) -> np.ndarray:
+    """Forced Van der Pol oscillator
+
+    d2x/dt2 - mu(1-x^2) dx/dt  + x - A sin(omega_1*t) + B sin(omega_2*t)
+
+    Args:
+        t (float): Time
+        state (ArrayLike): ODE states
+        mu (float, optional): VdP parameter. Defaults to 2.0.
+        A (float, optional): Forcing parameter. Defaults to 1.0.
+        B (float, optional): Forcing parameter. Defaults to 0.5.
+        omega_1 (float, optional): Forcing parameter. Defaults to 0.2.
+        omega_2 (float, optional): Forcing parameter. Defaults to 0.3.
+
+    Returns:
+        np.ndarray: ODE derivatives
+    """
     dx_dt, x = state
 
     d2x_dt2 = mu*(1-x**2)*dx_dt - x + A*np.sin(omega_1 * t) - B*np.sin(omega_2 * t)
@@ -33,7 +43,23 @@ def lorenz(
     rho: float = 28.0, 
     sigma: float = 10.0, 
     beta: float = 8/3,
-) -> ArrayLike:
+) -> np.ndarray:
+    """Lorenz attractor
+
+    dx/dt = sigma*(y-x)
+    dy/dt = x*(rho-z) - y
+    dz/dt = x*y - beta*z
+
+    Args:
+        t (float): Time
+        state (ArrayLike): ODE states
+        rho (float, optional): Lorenz parameter. Defaults to 28.0.
+        sigma (float, optional): Lorenz parameter. Defaults to 10.0.
+        beta (float, optional): Lorenz parameter. Defaults to 8/3.
+
+    Returns:
+        np.ndarray: ODE derivatives
+    """
     x, y, z = state
 
     dx_dt = sigma * (y - x)
@@ -49,7 +75,23 @@ def rossler(
     a: float = 0.2, 
     b: float = 0.2, 
     c: float = 5.7,
-) -> ArrayLike:
+) -> np.ndarray:
+    """Rössler attractor
+
+    dx/dt = -y-z
+    dy/dt = x + a*y
+    dz/dt = b + z*(x-c)
+
+    Args:
+        t (float): Time
+        state (ArrayLike): ODE states
+        a (float, optional): Rössler parameter. Defaults to 0.2.
+        b (float, optional): Rössler parameter. Defaults to 0.2.
+        c (float, optional): Rössler parameter. Defaults to 5.7.
+
+    Returns:
+        np.ndarray: ODE derivatives
+    """
     x, y, z = state
 
     dx_dt = -y - z
@@ -65,6 +107,30 @@ def generate_data(
     resolution: int = 10,
     noise: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Generate data from an ODE, with an empty input vector.
+
+    Supported sources:
+    - vdp: Van der Pol oscillator
+    - lorenz: Lorenz attractor
+    - rossler: Rössler attractor
+    - sin: Sin wave
+    - cvs: Cardiovascular system
+    - inertial_cvs: Cardiovascular system with inertial valve law
+    - jallon: Jallon heart/lung model
+
+    Args:
+        source (str): One of the above sources
+        n (int, optional): Number of data points. Defaults to 2000.
+        resolution (int, optional): Number of points per second. Defaults to 
+            10.
+        noise (float, optional): Output noise covariance. Defaults to 0.0.
+
+    Returns:
+        Tuple containing
+        - torch.Tensor: ODE outputs [n * n_states]
+        - torch.Tensor: ODE inputs [n * 0]
+        - torch.Tensor: Time vector [n]
+    """
     t_range = (0, (n-1)/resolution)
 
     if source == 'vdp':

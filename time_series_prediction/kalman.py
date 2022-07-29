@@ -11,34 +11,84 @@ from time_series_prediction import settings
 
 
 class NoiseModel(nn.Module):
+    """Base class for noise generation models"""
     ...
 
 
 class ScalarNoise(NoiseModel):
+    """Scalar Gaussian noise with a parameterised standard deviation
+
+    Internally represents the parameter with an inverse softplus transform
+    such that it is forced to be positive.
+
+    For a more complete implementation, see:
+    https://github.com/ymchen0/torchEnKF/blob/master/torchEnKF/noise.py
+    """
     def __init__(self, param: torch.Tensor, dim: int):
+        """Initialise
+
+        Args:
+            param (torch.Tensor): Standard deviation of Gaussian noise
+            dim (int): Number of dimensions (standard deviation is same in all
+                dimensions)
+        """
         super().__init__()
         param_trans = self._softplus_inv(param)
         self.param = nn.Parameter(param_trans)
         self.dim = dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply noise to a tensor
+
+        Args:
+            x (torch.Tensor): Tensor (one axis should have length self.dim)
+
+        Returns:
+            torch.Tensor: x with added noise
+        """
         param_untrans = self._softplus(self.param)
         x_out = x + torch.randn_like(x) * param_untrans
         return x_out
 
     def cov_mat(self) -> torch.Tensor:
+        """Covariance matrix of multivariate Gaussian. Just a diagonal matrix.
+
+        Returns:
+            torch.Tensor: Covariance matrix of shape [self.dim, self.dim]
+        """
         return torch.eye(self.dim, device=settings.device) * self._softplus(self.param)
 
     @staticmethod
-    def _softplus(t):
+    def _softplus(t: torch.Tensor) -> torch.Tensor:
+        """Softplus transformation:
+
+        y = log(1 + e^t)
+
+        Args:
+            t (torch.Tensor): Tensor to be transformed
+
+        Returns:
+            torch.Tensor: Transformed tensor
+        """
         return torch.log(1.0 + torch.exp(t))
 
     @staticmethod
-    def _softplus_inv(t):
-        return torch.log(-1.0 + torch.exp(t))
+    def _softplus_inv(t: torch.Tensor) -> torch.Tensor:
+        """Inverse softplus transformation:
+
+        y = log(e^t - 1)
+
+        Args:
+            t (torch.Tensor): Tensor to be transformed
+
+        Returns:
+            torch.Tensor: Transformed tensor
+        """
+        return torch.log(torch.exp(t) - 1.0)
 
 
 class AD_EnKF:
+    """Auto-Differentiable Ensemble Kalman Filter (AD-EnKF)"""
     def __init__(
         self,
         transition_function: nn.Module,
@@ -48,6 +98,26 @@ class AD_EnKF:
         n_particles: int,
         init_state_distribution: Optional[torch.distributions.Distribution] = None,
     ):
+        """Learn the dynamics of a dataset using AD-EnKF, with linear state
+        observations. The number of states and observations are defined by 
+        the shape of observation_matrix.
+
+        Args:
+            transition_function (nn.Module): Function to be trained to 
+                approximate the transition function: x_{i+1} = f(x_i)
+            observation_matrix (torch.Tensor): Observation matrix that 
+                transforms states into outputs: y = Ax. Has shape 
+                [n_observations, n_states]
+            observation_noise (NoiseModel): Function that adds noise to the
+                outputs to simulate measurement noise
+            process_noise (NoiseModel): Function that adds noise to the states
+                to simulate uncertainty/stochasticity in the process dynamics
+            n_particles (int): Number of particles to use in the ensemble 
+                Kalman filter
+            init_state_distribution (torch.distributions.Distribution, 
+                optional): Distribution of size [n_states, n_states]. Defaults 
+                to a MultivariateNormal distribution.
+        """
 
         self.transition_function = transition_function
         self.observation_matrix = observation_matrix
@@ -67,6 +137,18 @@ class AD_EnKF:
         self._fig = None
 
     def log_likelihood(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute log likelihood of the current model generating the observations
+
+        Args:
+            obs (torch.Tensor): Observations to compute log likelihood of, 
+                with shape [n_steps, self.n_observations]
+
+        Returns:
+            Tuple containing
+            - torch.Tensor: Log likelihood of data
+            - torch.Tensor: Estimated states, with shape 
+                [n_steps, self.n_particles, self.n_states]
+        """
 
         n_steps = obs.shape[0]
         x = torch.zeros((n_steps, self.n_particles, self.n_states), device=settings.device)
@@ -99,7 +181,9 @@ class AD_EnKF:
             # Analysis step
             # TODO: These are both reversed compared to paper - does it matter?
             h_xhat = torch.mm(x_hat, self.observation_matrix)
-            x[t, :, :] = x_hat + torch.mm(self.observation_noise(obs[t-1, :].repeat(self.n_particles, 1)) - h_xhat, k_hat)
+            x[t, :, :] = x_hat + torch.mm(
+                self.observation_noise(obs[t-1, :].repeat(self.n_particles, 1)) - h_xhat, 
+                k_hat)
             # for n in range(self.n_particles):
             #     h_xhat = torch.mm(self.observation_matrix, x[t, n, :])
             #     x[t, n, :] += torch.mm(k_hat, obs[t-1, :] + observation_noise_dist.sample((self.n_particles,)) - h_xhat)
@@ -116,12 +200,38 @@ class AD_EnKF:
     def train(
         self, 
         obs: torch.Tensor, 
-        n: int = 50, 
+        n_epochs: int = 50, 
         lr_decay: int = 1, 
         lr_hold: int = 10, 
-        show_fig: bool = True, 
+        progress_fig: bool = True, 
         display_fig: bool = True,
     ):
+        """Train the transition function and the process noise models using
+        AD-EnKF.
+
+        In a notebook context, supports creating a Plotly figure that is 
+        updated after every epoch to show the training progress.
+
+        If this method is called multiple times, subsequent calls will warm-
+        start the training. If progress_fig is True, the previous figure will
+        be re-used; setting display_fig to True will also display the figure
+        again below the current cell.
+
+        Args:
+            obs (torch.Tensor): Observations of process
+            n_epochs (int, optional): Number of training epochs. Defaults to 
+                50.
+            lr_decay (int, optional): Polynomial decay rate of learning rate. 
+                Defaults to 1.
+            lr_hold (int, optional): Number of epochs before beginning to decay
+                learning rate. Defaults to 10.
+            progress_fig (bool, optional): In a notebook context, create a 
+                Plotly figure that is updated every epoch to describe the 
+                training progress. Defaults to True.
+            display_fig (bool, optional): In a notebook context, display the 
+                figure created (if progress_fig is True) below this cell. 
+                Defaults to True.
+        """
 
         lambda1 = lambda2 = lambda epoch: (epoch+1-lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
 
@@ -133,13 +243,15 @@ class AD_EnKF:
                 {'params': beta, 'lr': 1e-1},
             ])
             # From https://github.com/ymchen0/torchEnKF/blob/016b4f8412310c195671c81790d372bd6cd9dc95/examples/l96_NN_demo.py
-            self._scheduler = torch.optim.lr_scheduler.LambdaLR(self._opt, lr_lambda=[lambda1, lambda2])
+            self._scheduler = torch.optim.lr_scheduler.LambdaLR(
+                self._opt, lr_lambda=[lambda1, lambda2])
 
-        if show_fig:
+        if progress_fig:
             if self._fig is None:
-                self._fig = go.FigureWidget(subplots.make_subplots(rows=3, cols=1, shared_xaxes=True))
+                self._fig = go.FigureWidget(
+                    subplots.make_subplots(rows=3, cols=1, shared_xaxes=True))
                 self._fig.update_layout(
-                    title_text=f'Training: n={n}, lr_decay={lr_decay}, lr_hold={lr_hold}'
+                    title_text=f'Training: n={n_epochs}, lr_decay={lr_decay}, lr_hold={lr_hold}'
                 )
                 self._fig.update_yaxes(row=1, title_text='Log likelihood')
                 self._fig.update_yaxes(row=2, title_text='LR')
@@ -147,26 +259,24 @@ class AD_EnKF:
                 self._fig.add_scatter(row=1, col=1, x=[], y=[])
                 self._fig.add_scatter(row=2, col=1, x=[], y=[])
                 self._fig.add_scatter(row=3, col=1, x=[], y=[])
+                self._epoch = 0
             if display_fig:
                 display(self._fig)
-            # i_list = []
-            # ll_list = []
-            # lambda_list = []
-            # beta_list = []
 
 
-        for i in range(n):
+        for i in range(n_epochs):
             self._opt.zero_grad()
             ll, _ = self.log_likelihood(obs)
             (-ll).backward()
+            self._epoch += 1
             with torch.no_grad():
-                if show_fig:
+                if progress_fig:
                     i_list = list(self._fig.data[0].x)
                     ll_list = list(self._fig.data[0].y)
                     lambda_list = list(self._fig.data[1].y)
                     beta_list = list(self._fig.data[2].y)
 
-                    i_list.append(i_list[-1] + 1)
+                    i_list.append(self._epoch)
                     ll_list.append(ll.detach().cpu().numpy())
                     lambda_list.append(self._scheduler.get_last_lr()[0])
                     beta_list.append(self.process_noise.param.detach().cpu().numpy()[0])
@@ -178,11 +288,27 @@ class AD_EnKF:
                     self._fig.data[1].y = lambda_list
                     self._fig.data[2].y = beta_list
                 else:
-                    print(i, ll.detach().cpu().numpy(), self.process_noise.param.detach().cpu().numpy()[0])
+                    print(
+                        i, 
+                        ll.detach().cpu().numpy(), 
+                        self.process_noise.param.detach().cpu().numpy()[0],
+                    )
             self._opt.step()
             self._scheduler.step()
 
     def forward(self, x: torch.Tensor, include_process_noise: bool = False) -> torch.Tensor:
+        """Call the transition function to predict the next state of a 
+        sequence, given the current state. Optionally add process noise to the
+        new state.
+
+        Args:
+            x (torch.Tensor): Current state
+            include_process_noise (bool, optional): Add process noise to 
+                transition. Defaults to False.
+
+        Returns:
+            torch.Tensor: Next state
+        """
         # TODO: Wire up t, u
         x_next = self.transition_function(None, x, None)
         if include_process_noise:
@@ -192,13 +318,34 @@ class AD_EnKF:
 
     def predict(
         self,
-        x_i: torch.Tensor, 
+        x_0: torch.Tensor, 
         n: int, 
         include_process_noise: bool = False, 
         include_observation_noise: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Predict the state and output of a sequence a number of steps into
+        the future, given an initial state.
+
+        TODO: output tensors instead of ndarrays
+
+        Args:
+            x_i (torch.Tensor): Initial state
+            n (int): Number of steps to predict
+            include_process_noise (bool, optional): Add process noise to 
+                transition. Defaults to False.
+            include_observation_noise (bool, optional): Add observation noise.
+                Defaults to False.
+
+        Returns:
+            Tuple containing:
+            - np.ndarray: AD-EnKF states
+            - np.ndarray: AD-EnKF outputs
+        """
+
         x_kf = []
         y_kf = []
+
+        x_i = x_0
 
         for i in range(n):
             y_i = torch.mm(x_i, self.observation_matrix)
@@ -214,7 +361,15 @@ class AD_EnKF:
 
 
 class NeuralNet(nn.Module):
+    """Simple neural network"""
     def __init__(self, input_dim: int, output_dim: int, hidden_dims: list[int]):
+        """Initialise
+
+        Args:
+            input_dim (int): Dimension of NN input
+            output_dim (int): Dimension of NN output
+            hidden_dims (list[int]): List of hidden layer dimensions
+        """
         super().__init__()
         self.first_layer = nn.Linear(input_dim, hidden_dims[0])
         self.last_layer = nn.Linear(hidden_dims[-1], output_dim)
@@ -223,6 +378,18 @@ class NeuralNet(nn.Module):
             self.hidden_layers.append(nn.Linear(dim_1, dim_2))
 
     def forward(self, t: torch.Tensor, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        """Perform forward pass through neural network. Method signature
+        is formatted like a nonlinear ODE, but time and input tensors are
+        currently unused.
+
+        Args:
+            t (torch.Tensor): Current time
+            x (torch.Tensor): Current state
+            u (torch.Tensor): Current inputs
+
+        Returns:
+            torch.Tensor: Next state
+        """
         y = torch.relu(self.first_layer(x))
         for layer in self.hidden_layers:
             y = torch.relu(layer(y))
@@ -231,17 +398,52 @@ class NeuralNet(nn.Module):
 
 
 class ResNet(NeuralNet):
+    """Residual neural network"""
     def forward(self, t: torch.Tensor, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        """Perform forward pass through neural network. Method signature
+        is formatted like a nonlinear ODE, but time and input tensors are
+        currently unused.
+
+        Args:
+            t (torch.Tensor): Current time
+            x (torch.Tensor): Current state
+            u (torch.Tensor): Current inputs
+
+        Returns:
+            torch.Tensor: Next state
+        """
         y = super().forward(t, x, u)
         return x + y
 
 
 class EulerStepNet(NeuralNet):
+    """Euler step network. Half-way between a ResNet and a Nerual ODE, just
+    multiply the residual by a timestep such that the network approximately
+    learns the derivative.
+    """
     def __init__(self, *args, dt: float = 0.1, **kwargs):
+        """Initialise
+
+        Args:
+            dt (float, optional): Fixed timestep. Defaults to 0.1.
+        """
         super().__init__(*args, **kwargs)
         self.dt = dt
 
     def forward(self, t: torch.Tensor, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        """Perform forward pass through neural network. Method signature
+        is formatted like a nonlinear ODE, but time and input tensors are
+        currently unused.
+
+        Args:
+            t (torch.Tensor): Current time
+            x (torch.Tensor): Current state
+            u (torch.Tensor): Current inputs
+
+        Returns:
+            torch.Tensor: Next state
+        """
+
         y = super().forward(t, x, u)
         return x + y * self.dt
 

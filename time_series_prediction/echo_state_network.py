@@ -99,13 +99,15 @@ class ESN:
         u: torch.Tensor, 
         x_0: torch.Tensor, 
         y_0: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Run the forwards function repeatedly and output a sequence of states
         and outputs
 
+        TODO: output tensors instead of ndarrays
+
         Args:
             u (torch.Tensor): Inputs to model. If the model has no inputs 
-                (self.n_inputs=0), then this must be a tensor of shape [n*0]
+                (self.n_inputs=0), then this must be a tensor of shape [n, 0]
                 where n is the length of the required output sequence
             x_0 (torch.Tensor): Initial reservoir state of shape 
                 [self.n_neurons]
@@ -113,8 +115,8 @@ class ESN:
 
         Returns:
             Tuple containing:
-            - torch.Tensor: ESN states
-            - torch.Tensor: ESN outputs
+            - np.ndarray: ESN states
+            - np.ndarray: ESN outputs
         """
         x_esn = []
         y_esn = []
@@ -142,11 +144,11 @@ class ESN:
 
         Args:
             inputs (torch.Tensor): Inputs to process, of shape 
-                [n*self.n_inputs]. Note that the first input is not used in
+                [n, self.n_inputs]. Note that the first input is not used in
                 training as the reservoir is initialised with zeros. If there
-                are no inputs this must still be of shape [n*0] 
+                are no inputs this must still be of shape [n, 0] 
             outputs (torch.Tensor): Outputs of process, of shape 
-                [n*self.n_outputs]
+                [n, self.n_outputs]
             n_discard (int, optional): Number of initial reservoir states to 
                 discard when training the output layer. Used to make sure the
                 arbitrary choice of initial conditions does not affect the
@@ -155,7 +157,7 @@ class ESN:
 
         Returns:
             torch.Tensor: Reservoir states driven by the inputs and outputs, of
-                shape [n*self.n_neurons]
+                shape [n, self.n_neurons]
         """
         
         n_steps = outputs.shape[0]
