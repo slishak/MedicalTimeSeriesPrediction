@@ -5,7 +5,7 @@ Modelling and prediction of medical time series from biomechanical models and IC
 
 Requires packages in [requirements.txt](requirements.txt) and Python 3.9. 
 
-Currently requires custom fork of torchdiffeq, install as follows:
-`pip install git+https://github.com/slishak/torchdiffeq@add-callbacks`
+Currently requires master branch of torchdiffeq
+`pip install git+https://github.com/rtqichen/torchdiffeq`
 
 Work in progress.
