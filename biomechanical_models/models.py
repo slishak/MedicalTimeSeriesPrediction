@@ -6,7 +6,7 @@ from typing import ClassVar, Union
 import torch
 import pandas as pd
 from torch import nn
-from torchdiffeq import odeint
+from torchdiffeq import odeint, odeint_adjoint
 from scipy.optimize import root_scalar
 from xitorch.optimize import rootfinder
 from xitorch._utils.exceptions import ConvergenceWarning
@@ -161,7 +161,7 @@ class SmithCardioVascularSystem(ODEBase):
         self.ao = PressureVolume(convert(94, 'kPa/l'), convert(0.8, 'l'), None, None, None)
     
         # Cardiac pattern generator
-        self.e = CardiacDriver(hr=80)
+        self.e = CardiacDriver(hr=80.0)
 
         # Jallon 2009 modification
         self.p_pl_affects_pu_and_pa = nn.Parameter(torch.tensor(False), requires_grad=False)
@@ -277,9 +277,9 @@ class SmithCardioVascularSystem(ODEBase):
         # Eq. 9, 10, 16
         v_lvf = states['v_lv'] - v_spt
         v_rvf = states['v_rv'] + v_spt
-        p_lvf = self.lvf.p_es(v_lvf, e_t) 
-        p_rvf = self.rvf.p_es(v_rvf, e_t)
-        p_spt = self.spt.p_es(v_spt, e_t)
+        p_lvf = self.lvf.p(v_lvf, e_t) 
+        p_rvf = self.rvf.p(v_rvf, e_t)
+        p_spt = self.spt.p(v_spt, e_t)
 
         # Eq. 12, 13
         p_lv = p_lvf + p_peri
@@ -330,6 +330,7 @@ class SmithCardioVascularSystem(ODEBase):
         self, 
         t_final: float, 
         resolution: int,
+        adjoint: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Simulate cardiovascular model. Returns regularly spaced time and 
         state tensors. Irregularly spaced outputs available in self.trajectory.
@@ -337,6 +338,7 @@ class SmithCardioVascularSystem(ODEBase):
         Args:
             t_final (float): Final time (s)
             resolution (int): State output resolution (Hz)
+            adjoint (bool): Use adjoint integrator
 
         Returns:
             Tuple containing:
@@ -344,7 +346,7 @@ class SmithCardioVascularSystem(ODEBase):
             - sol (torch.Tensor): State tensor
         """
 
-        super().simulate(t_final, resolution)
+        super().simulate()
         
         states = {
             'v_pa': torch.tensor(convert(0.185, 'l')),
@@ -359,7 +361,11 @@ class SmithCardioVascularSystem(ODEBase):
         print(f'Total blood volume: {v_tot.item():.4f}l')
 
         t = torch.linspace(0, t_final, t_final*resolution + 1)
-        sol = odeint(
+        if adjoint:
+            solver = odeint_adjoint
+        else:
+            solver = odeint
+        sol = solver(
             self, 
             x_0, 
             t, 
@@ -561,9 +567,9 @@ class SmithCardioVascularSystem(ODEBase):
         v_rvf = v_rv + v_spt
 
         # Eq. 16, 17
-        p_lvf = cvs.lvf.p_es(v_lvf, e_t)
-        p_rvf = cvs.rvf.p_es(v_rvf, e_t)
-        p_spt = cvs.spt.p_es(v_spt, e_t)
+        p_lvf = cvs.lvf.p(v_lvf, e_t)
+        p_rvf = cvs.rvf.p(v_rvf, e_t)
+        p_spt = cvs.spt.p(v_spt, e_t)
 
         # Eq. 15
         p_spt_rhs = p_lvf - p_rvf
@@ -903,7 +909,7 @@ class JallonHeartLungs(ODEBase):
             - sol (torch.Tensor): State tensor
         """
         
-        super().simulate(t_final, resolution)
+        super().simulate()
 
         states = {
             # Blood volume: should total 5.5

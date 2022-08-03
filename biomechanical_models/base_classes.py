@@ -41,7 +41,7 @@ class ODEBase(ABC, nn.Module):
         Returns:
             dict[str, torch.Tensor]: ODE state tensor
         """
-        state = torch.tensor([
+        state = torch.stack([
             outputs[state] for state in self.state_names
         ])
 
@@ -57,7 +57,7 @@ class ODEBase(ABC, nn.Module):
             dict[str, torch.Tensor]: ODE state derivative tensor
         """
 
-        deriv = torch.tensor([
+        deriv = torch.stack([
             outputs[f'd{state}_dt'] for state in self.state_names
         ])
 
