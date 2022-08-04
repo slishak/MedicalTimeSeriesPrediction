@@ -8,12 +8,37 @@ from biomechanical_models.models import SmithCardioVascularSystem, JallonHeartLu
 from biomechanical_models.unit_conversions import convert
 
 
-def plot_states(cvs, t_sol, sol, t, x, dx_dt):
+def plot_states(cvs, t_sol, sol, t, x):
     fig = make_subplots(len(cvs.state_names), 2, column_titles=['states', 'derivatives'], shared_xaxes='all')
+    showlegend_grid = True
+    showlegend_steps = True
     for i, name in enumerate(cvs.state_names):
-        fig.add_scatter(x=t_sol, y=sol[:, i], line_color='black', name='grid', row=i+1, col=1, showlegend=False)
-        fig.add_scatter(x=t, y=x[:, i], line_color='red', name='steps', row=i+1, col=1, showlegend=False)
-        fig.add_scatter(x=t, y=df[f'd{name}_dt'], line_color='blue', name='derivative', row=i+1, col=2, showlegend=False)
+        fig.add_scatter(
+            x=t_sol, 
+            y=sol[:, i], 
+            line_color='black', 
+            name='grid', 
+            row=i+1, col=1, 
+            showlegend=showlegend_grid, legendgroup='grid',
+        )
+        fig.add_scatter(
+            x=t, 
+            y=x[:, i], 
+            line_color='red', 
+            name='steps', 
+            row=i+1, col=1, 
+            showlegend=showlegend_steps, legendgroup='steps',
+        )
+        showlegend_grid = False
+        showlegend_steps = False
+        fig.add_scatter(
+            x=t, 
+            y=df[f'd{name}_dt'], 
+            line_color='black', 
+            name='grid', 
+            row=i+1, col=2, 
+            showlegend=showlegend_steps, legendgroup='grid',
+        )
         fig.update_yaxes(title_text=name, row=i+1, col=1)
         fig.update_yaxes(title_text=f'd{name}_dt', row=i+1, col=2)
     return fig
@@ -78,16 +103,15 @@ def plot_outputs(df):
 if __name__ == '__main__':
     # cvs = SmithCardioVascularSystem()
     cvs = JallonHeartLungs()
-    t_sol, sol = cvs.simulate()
+    t_sol, sol = cvs.simulate(50, 50)
 
     t, x, dx_dt, outputs = zip(*cvs.trajectory)
     t = torch.tensor(t)
     x = torch.stack(x)
-    dx_dt = torch.stack(dx_dt)
     df = pd.DataFrame(outputs).apply(lambda s: [float(x) for x in s])
     df['t'] = t
 
-    fig_states = plot_states()
+    fig_states = plot_states(cvs, t_sol, sol, t, x)
     fig_states.write_html('states.html', auto_open=True)
 
     fig = plot_outputs(df)
