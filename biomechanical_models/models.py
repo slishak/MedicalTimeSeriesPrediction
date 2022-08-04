@@ -358,7 +358,8 @@ class SmithCardioVascularSystem(ODEBase):
         }
         x_0 = self.ode_state_tensor(states)
         v_tot = convert(x_0.sum(), to='l')
-        print(f'Total blood volume: {v_tot.item():.4f}l')
+        if self.verbose:
+            print(f'Total blood volume: {v_tot.item():.4f}l')
 
         t = torch.linspace(0, t_final, t_final*resolution + 1)
         if adjoint:
@@ -762,13 +763,19 @@ class InertialSmithCVS(SmithCardioVascularSystem):
             outputs['q_pul'] = self.pul.flow_rate(outputs['p_pa'], outputs['p_pu'])
             outputs['q_sys'] = self.sys.flow_rate(outputs['p_ao'], outputs['p_vc'])
 
-    def simulate(self, t_final: float, resolution: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def simulate(
+        self,
+        t_final: float, 
+        resolution: int,
+        adjoint: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Simulate cardiovascular model. Returns regularly spaced time and 
         state tensors. Irregularly spaced outputs available in self.trajectory.
 
         Args:
             t_final (float): Final time (s)
             resolution (int): State output resolution (Hz)
+            adjoint (bool): Use adjoint integrator
 
         Returns:
             Tuple containing:
@@ -799,7 +806,11 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         #     max_step=1e-4,
         #     )
         t = torch.linspace(0, t_final, int(t_final*resolution) + 1)
-        sol = odeint(
+        if adjoint:
+            solver = odeint_adjoint
+        else:
+            solver = odeint
+        sol = solver(
             self, 
             x_0, 
             t, 
@@ -895,13 +906,19 @@ class JallonHeartLungs(ODEBase):
 
         return all_outputs
 
-    def simulate(self, t_final: float, resolution: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def simulate(
+        self, 
+        t_final: float, 
+        resolution: int,
+        adjoint: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Simulate Jallon heart/lung model. Returns regularly spaced time and 
         state tensors. Irregularly spaced outputs available in self.trajectory.
 
         Args:
             t_final (float): Final time (s)
             resolution (int): State output resolution (Hz)
+            adjoint (bool): Use adjoint integrator
 
         Returns:
             Tuple containing:
@@ -933,10 +950,15 @@ class JallonHeartLungs(ODEBase):
         x_0 = self.ode_state_tensor(states)
         
         v_tot = convert(x_0[:6].sum(), to='l')
-        print(f'Total blood volume: {v_tot.item():.3f}l')
+        if self.verbose:
+            print(f'Total blood volume: {v_tot.item():.3f}l')
 
         t = torch.linspace(0, t_final, int(t_final*resolution) + 1)
-        sol = odeint(
+        if adjoint:
+            solver = odeint_adjoint
+        else:
+            solver = odeint
+        sol = solver(
             self, 
             x_0, 
             t, 

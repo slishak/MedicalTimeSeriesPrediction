@@ -17,9 +17,16 @@ class ODEBase(ABC, nn.Module):
     to denote state names
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, verbose=True, **kwargs):
+        """Initialises nn.Module
+
+        Args:
+            verbose (bool, optional): Print integration progress after every
+                accepted step. Defaults to True.
+        """
         super().__init__(*args, **kwargs)
         self.trajectory = []
+        self.verbose = verbose
 
     def ode_state_dict(self, states: torch.Tensor) -> dict[str, torch.Tensor]:
         """Convert a tensor of ODE states to a dict
@@ -112,7 +119,8 @@ class ODEBase(ABC, nn.Module):
             x (torch.Tensor): ODE state tensor
             dt (torch.Tensor): Time step (s)
         """
-        print(f't={t:.4f}s, dt={dt:.4f}')
+        if self.verbose:
+            print(f't={t:.4f}s, dt={dt:.4f}')
         states = self.ode_state_dict(x)
         outputs = self.model(t, states)
         deriv = self.ode_deriv_tensor(outputs)
@@ -381,23 +389,18 @@ class CardiacDriver(nn.Module):
         self.c = nn.Parameter(torch.as_tensor(c), requires_grad=False)
         self.hr = nn.Parameter(torch.as_tensor(hr), requires_grad=False)
 
-    def forward(self, t: torch.Tensor, n_beats: int = 500) -> torch.Tensor:
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
         """Evaluate cardiac driver function at a given time point.
-
-        TODO: make more efficient by removing n_beats parameter.
 
         Args:
             t (torch.Tensor): Time (s)
-            n_beats (int, optional): Maximum number of beats to simulate. 
-                Defaults to 500.
 
         Returns:
             torch.Tensor: e(t)
         """
 
-        t_beats = torch.arange(n_beats)[:, None]*60/self.hr
-        e_beats = self.a * torch.exp(-self.b * (t - self.c - t_beats)**2)
-        e = e_beats.sum(0).reshape_as(t)
+        t_wrapped = torch.remainder(t, 60/self.hr)
+        e = self.a * torch.exp(-self.b * (t_wrapped - self.c)**2)
 
         return e
 
