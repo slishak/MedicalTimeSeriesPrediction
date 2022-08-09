@@ -4,7 +4,7 @@ from typing import ClassVar, Optional
 import torch
 from torch import nn
 
-from biomechanical_models.unit_conversions import convert
+from biophysical_models.unit_conversions import convert
 
 
 class ODEBase(ABC, nn.Module):

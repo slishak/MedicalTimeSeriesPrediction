@@ -11,7 +11,7 @@ from scipy.optimize import root_scalar
 from xitorch.optimize import rootfinder
 from xitorch._utils.exceptions import ConvergenceWarning
 
-from biomechanical_models.base_classes import (
+from biophysical_models.base_classes import (
     ODEBase, 
     CardiacDriver, 
     Valve, 
@@ -20,8 +20,8 @@ from biomechanical_models.base_classes import (
     InertialValve, 
     RespiratoryPatternGenerator
 )
-from biomechanical_models.unit_conversions import convert
-from biomechanical_models import parameters
+from biophysical_models.unit_conversions import convert
+from biophysical_models import parameters
 
 USE_XITORCH = False
 warnings.simplefilter('error', ConvergenceWarning)

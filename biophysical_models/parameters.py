@@ -1,6 +1,6 @@
 from torch import tensor
 
-from biomechanical_models.unit_conversions import convert
+from biophysical_models.unit_conversions import convert
 
 smith_2007_cvs = {
     'p_pl': tensor(convert(-4, 'mmHg')),
