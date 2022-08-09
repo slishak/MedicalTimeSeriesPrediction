@@ -168,7 +168,7 @@ class SmithCardioVascularSystem(ODEBase):
 
         # First initial guess for v_spt
         self._v_spt_old = torch.tensor(convert(0.0055, 'l'))
-        self._v_spt_scale = nn.Parameter(torch.tensor(1.0), requires_grad=False)
+        self._v_spt_scale = 1.0
 
     def callback_accept_step(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor):
         """Called by torchdiffeq at the end of a successful step. Used to 
