@@ -3,7 +3,7 @@ import torch
 from scipy.integrate import solve_ivp
 from numpy.typing import ArrayLike
 
-from biomechanical_models.models import SmithCardioVascularSystem, InertialSmithCVS, JallonHeartLungs
+from biophysical_models.models import SmithCardioVascularSystem, InertialSmithCVS, JallonHeartLungs
 
 def vdp(
     t: float, 

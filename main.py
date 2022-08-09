@@ -4,8 +4,8 @@ import torch
 from plotly.subplots import make_subplots
 from scipy.integrate import cumulative_trapezoid
 
-from biomechanical_models.models import SmithCardioVascularSystem, JallonHeartLungs, InertialSmithCVS
-from biomechanical_models.unit_conversions import convert
+from biophysical_models.models import SmithCardioVascularSystem, JallonHeartLungs, InertialSmithCVS
+from biophysical_models.unit_conversions import convert
 
 
 def plot_states(cvs, t_sol, sol, t, x):
