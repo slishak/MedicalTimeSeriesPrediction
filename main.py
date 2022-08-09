@@ -34,10 +34,10 @@ def plot_states(cvs, t_sol, sol, t, x):
         fig.add_scatter(
             x=t, 
             y=df[f'd{name}_dt'], 
-            line_color='black', 
-            name='grid', 
+            line_color='red', 
+            name='steps', 
             row=i+1, col=2, 
-            showlegend=showlegend_steps, legendgroup='grid',
+            showlegend=showlegend_steps, legendgroup='steps',
         )
         fig.update_yaxes(title_text=name, row=i+1, col=1)
         fig.update_yaxes(title_text=f'd{name}_dt', row=i+1, col=2)
