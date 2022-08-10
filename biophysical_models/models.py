@@ -1,7 +1,7 @@
 from time import perf_counter
 import warnings
 from dataclasses import dataclass
-from typing import ClassVar, Union
+from typing import ClassVar, Union, Optional
 
 import torch
 import pandas as pd
@@ -23,14 +23,15 @@ from biophysical_models.base_classes import (
 from biophysical_models.unit_conversions import convert
 from biophysical_models import parameters
 
-USE_XITORCH = False
 warnings.simplefilter('error', ConvergenceWarning)
 # pd.options.plotting.backend = 'plotly'
 
 
 @dataclass
 class PassiveRespiratorySystem(ODEBase):
-    """Passive mechanical respiratory system
+    """Passive mechanical respiratory system. Note that this model cannot be 
+    simulated in isolation as it requires additional states from the 
+    respiratory pattern generator and the cardiovascular model.
     
     (Jallon, 2009)"""
 
@@ -80,7 +81,11 @@ class PassiveRespiratorySystem(ODEBase):
         self.mu = nn.Parameter(torch.as_tensor(mu), requires_grad=False)
         self.beta = nn.Parameter(torch.as_tensor(beta), requires_grad=False)
 
-    def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def model(
+        self, 
+        t: torch.Tensor, 
+        states: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
         """Passive respiratory model implementation
 
         Args:
@@ -114,6 +119,18 @@ class PassiveRespiratorySystem(ODEBase):
 
         return outputs
 
+    def init_states(self) -> dict[str, torch.Tensor]:
+        """Return initial values of ODE states.
+
+        Returns:
+            dict[str, torch.Tensor]: Initial ODE states
+        """
+
+        # Jallon 2009, Table 1:
+        return {
+            'v_alv': torch.tensor(convert(0.5, 'l')),
+            'p_mus': torch.tensor(0.0),
+        }
 
 class SmithCardioVascularSystem(ODEBase):
     """Smith CVS model with no inertia and Heaviside valve law
@@ -122,12 +139,19 @@ class SmithCardioVascularSystem(ODEBase):
 
     state_names: ClassVar[list[str]] = ['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv']
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, p_pl_is_input=False, **kwargs):
         """Initialise. All parameters passed to nn.Module. 
 
         Default parameter values from Smith, 2005.
+
+        Args:
+            p_pl_is_input (bool, optional): Get pleural pressure from input,
+                otherwise create a parameter. Defaults to False.
         """
+
         super().__init__(*args, **kwargs)
+
+        self._p_pl_is_input = p_pl_is_input
 
         # Valves
         self.mt = Valve(convert(0.06, 'kPa s/l'))  # Mitral valve
@@ -140,7 +164,8 @@ class SmithCardioVascularSystem(ODEBase):
         self.sys = BloodVessel(convert(140, 'kPa s/l'))  # Systematic circulation
 
         # Pleural pressure
-        self.p_pl = nn.Parameter(torch.tensor(-4.0), requires_grad=False)
+        if not p_pl_is_input:
+            self.p_pl = nn.Parameter(torch.tensor(-4.0), requires_grad=False)
 
         # Pressure-volume relationships
         # Left ventricle free wall
@@ -163,6 +188,9 @@ class SmithCardioVascularSystem(ODEBase):
         # Cardiac pattern generator
         self.e = CardiacDriver(hr=80.0)
 
+        # Total blood volume
+        self.v_tot = nn.Parameter(torch.tensor(convert(5.5, 'l')), requires_grad=False)
+
         # Jallon 2009 modification
         self.p_pl_affects_pu_and_pa = nn.Parameter(torch.tensor(False), requires_grad=False)
 
@@ -184,12 +212,19 @@ class SmithCardioVascularSystem(ODEBase):
         super().callback_accept_step(t, x, dt)
         self._v_spt_old = self.trajectory[-1][3]['v_spt']
 
-    def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def model(
+        self, 
+        t: torch.Tensor, 
+        states: dict[str, torch.Tensor],
+        p_pl: Optional[torch.Tensor] = None,
+    ) -> dict[str, torch.Tensor]:
         """Model implementation
 
         Args:
             t (torch.Tensor): Time (s)
             states (dict[str, torch.Tensor]): Model states
+            p_pl (torch.Tensor, optional): Optional input to ODE. Defaults to 
+                None.
 
         Returns:
             dict[str, torch.Tensor]: Model outputs
@@ -197,7 +232,12 @@ class SmithCardioVascularSystem(ODEBase):
 
         # t1 = perf_counter()
 
-        outputs = self.pressures_volumes(t, states)
+        if self._p_pl_is_input:
+            assert p_pl is not None, "p_pl not passed to CVS model"
+        else:
+            p_pl = self.p_pl
+
+        outputs = self.pressures_volumes(t, states, p_pl)
         self.flow_rates(outputs)
         self.derivatives(states, outputs)
 
@@ -243,8 +283,11 @@ class SmithCardioVascularSystem(ODEBase):
         self, 
         t: torch.Tensor, 
         states: dict[str, torch.Tensor],
+        p_pl: Optional[torch.Tensor] = None,
     ) -> dict[str, torch.Tensor]:
         """Compute pressures and volumes of cardiovascular model.
+
+        Pleural pressure either comes from a parameter or an external input.
         
         Equation numbers from Smith 2004 (or 2007 if explicitly stated).
 
@@ -253,16 +296,22 @@ class SmithCardioVascularSystem(ODEBase):
         Args:
             t (torch.Tensor): Time (s)
             states (dict[str, torch.Tensor]): Model states
+            p_pl (torch.Tensor, Optional): Pleural pressure
 
         Returns:
             dict[str, torch.Tensor]: Pressure/volume outputs
         """
 
+        if self._p_pl_is_input:
+            assert p_pl is not None, "p_pl not passed to CVS model"
+        else:
+            p_pl = self.p_pl
+
         # Pericardium pressure-volume relationship
         # Eq. 11, 18, 14. Note p_pl (pleural cavity) is p_th (thoracic cavity)
         v_pcd = states['v_lv'] + states['v_rv']
         p_pcd = self.pcd.p_ed(v_pcd)
-        p_peri = p_pcd + self.p_pl
+        p_peri = p_pcd + p_pl
 
         # Evaluate model driving function
         e_t = self.e(t)
@@ -292,8 +341,8 @@ class SmithCardioVascularSystem(ODEBase):
         p_vc = self.vc.p_es(states['v_vc'])
 
         if self.p_pl_affects_pu_and_pa:
-            p_pa = p_pa + self.p_pl
-            p_pu = p_pu + self.p_pl
+            p_pa = p_pa + p_pl
+            p_pu = p_pu + p_pl
             
         # t2 = perf_counter()
         # print(f'pv: {t2-t1:.2e}s')
@@ -326,57 +375,49 @@ class SmithCardioVascularSystem(ODEBase):
 
         return outputs
 
-    def simulate(
-        self, 
-        t_final: float, 
-        resolution: int,
-        adjoint: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Simulate cardiovascular model. Returns regularly spaced time and 
-        state tensors. Irregularly spaced outputs available in self.trajectory.
+    def init_states(
+        self,
+        r_pa: float = 0.034,
+        r_pu: float = 0.164,
+        r_lv: float = 0.025,
+        r_ao: float = 0.173,
+        r_rv: float = 0.024,
+    ) -> dict[str, torch.Tensor]:
+        """Return initial values of ODE states by setting initial proportions 
+        of the total blood volume in each of the six compartments. The volume
+        of blood in the vena cava is automatically calculated as whatever is 
+        left over.
 
         Args:
-            t_final (float): Final time (s)
-            resolution (int): State output resolution (Hz)
-            adjoint (bool): Use adjoint integrator
+            r_pa (float, optional): Proportion of blood initially in pulmonary
+                artery. Defaults to 0.034.
+            r_pu (float, optional): Proportion of blood initially in pulmonary 
+                vein. Defaults to 0.164.
+            r_lv (float, optional): Proportion of blood initially in left 
+                ventricle. Defaults to 0.025.
+            r_ao (float, optional): Proportion of blood initially in aorta. 
+                Defaults to 0.173.
+            r_rv (float, optional): Proportion of blood initially in right 
+                ventricle. Defaults to 0.024.
 
         Returns:
-            Tuple containing:
-            - t (torch.Tensor): Time tensor
-            - sol (torch.Tensor): State tensor
+            dict[str, torch.Tensor]: Initial ODE states
         """
 
-        super().simulate()
-        
+        r_vc = 1 - r_pa - r_pu - r_lv - r_ao - r_rv
+
+        assert r_vc > 0, "Initial v_vc must not be negative"
+
         states = {
-            'v_pa': torch.tensor(convert(0.185, 'l')),
-            'v_pu': torch.tensor(convert(0.90, 'l')),
-            'v_lv': torch.tensor(convert(0.135, 'l')),
-            'v_ao': torch.tensor(convert(0.95, 'l')),
-            'v_vc': torch.tensor(convert(3.19, 'l')),
-            'v_rv': torch.tensor(convert(0.14, 'l')),
+            'v_pa': r_pa * self.v_tot,
+            'v_pu': r_pu * self.v_tot,
+            'v_lv': r_lv * self.v_tot,
+            'v_ao': r_ao * self.v_tot,
+            'v_vc': r_vc * self.v_tot,
+            'v_rv': r_rv * self.v_tot,
         }
-        x_0 = self.ode_state_tensor(states)
-        v_tot = convert(x_0.sum(), to='l')
-        if self.verbose:
-            print(f'Total blood volume: {v_tot.item():.4f}l')
 
-        t = torch.linspace(0, t_final, t_final*resolution + 1)
-        if adjoint:
-            solver = odeint_adjoint
-        else:
-            solver = odeint
-        sol = solver(
-            self, 
-            x_0, 
-            t, 
-            method='dopri5', 
-            rtol=1e-6, 
-            atol=1e-6, 
-            options={'max_step': 1e-2},
-        )
-
-        return t, sol
+        return states
 
     def solve_v_spt(
         self, 
@@ -727,18 +768,25 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         outputs['dq_tc_dt'] = self.tc.flow_rate_deriv(outputs['p_vc'], outputs['p_rv'], states['q_tc'])
         outputs['dq_pv_dt'] = self.pv.flow_rate_deriv(outputs['p_rv'], outputs['p_pa'], states['q_pv'])
 
-    def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def model(
+        self, 
+        t: torch.Tensor, 
+        states: dict[str, torch.Tensor],
+        p_pl: Optional[torch.Tensor] = None,
+    ) -> dict[str, torch.Tensor]:
         """Model implementation
 
         Args:
             t (torch.Tensor): Time (s)
             states (dict[str, torch.Tensor]): Model states
+            p_pl (torch.Tensor, optional): Optional input to ODE. Defaults to 
+                None.
 
         Returns:
             dict[str, torch.Tensor]: Model outputs
         """
 
-        outputs = self.pressures_volumes(t, states)
+        outputs = self.pressures_volumes(t, states, p_pl)
         self.flow_rates(outputs)
         outputs['q_mt'] = torch.clamp(states['q_mt'], min=0.0)
         outputs['q_av'] = torch.clamp(states['q_av'], min=0.0)
@@ -763,64 +811,60 @@ class InertialSmithCVS(SmithCardioVascularSystem):
             outputs['q_pul'] = self.pul.flow_rate(outputs['p_pa'], outputs['p_pu'])
             outputs['q_sys'] = self.sys.flow_rate(outputs['p_ao'], outputs['p_vc'])
 
-    def simulate(
-        self,
-        t_final: float, 
-        resolution: int,
-        adjoint: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Simulate cardiovascular model. Returns regularly spaced time and 
-        state tensors. Irregularly spaced outputs available in self.trajectory.
+    def init_states(
+        self, 
+        r_pa: float = 0.029,
+        r_pu: float = 0.539,
+        r_lv: float = 0.063,
+        r_ao: float = 0.089,
+        r_rv: float = 0.061,
+        p_pl: Optional[torch.Tensor] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Return initial values of ODE states.
+
+        Note that the default blood volume proportions here are quite different
+        to those in SmithCardioVascularSystem, as the default parameters from 
+        Paeme (2011) seem to use a total blood volume of 1.5 litres rather than
+        5.5 litres as stated - or in other words, the unstressed 4 litres are 
+        ignored and only the stressed 1.5 litres are simulated (there is only 
+        2ml of dead space in total in the system).
 
         Args:
-            t_final (float): Final time (s)
-            resolution (int): State output resolution (Hz)
-            adjoint (bool): Use adjoint integrator
+            r_pa (float, optional): Proportion of blood initially in pulmonary
+                artery. Defaults to 0.029.
+            r_pu (float, optional): Proportion of blood initially in pulmonary 
+                vein. Defaults to 0.539.
+            r_lv (float, optional): Proportion of blood initially in left 
+                ventricle. Defaults to 0.063.
+            r_ao (float, optional): Proportion of blood initially in aorta. 
+                Defaults to 0.089.
+            r_rv (float, optional): Proportion of blood initially in right 
+                ventricle. Defaults to 0.061.
+            p_pl (torch.Tensor, optional): Optional input to ODE. Defaults to 
+                None.
 
         Returns:
-            Tuple containing:
-            - t (torch.Tensor): Time tensor
-            - sol (torch.Tensor): State tensor
+            dict[str, torch.Tensor]: Initial ODE states
         """
 
-        # TODO: fix inheritance so can just call super() here. Create method to define
-        # initial conditions?
-        self.trajectory = []
-
-        # Matlab
-        states = {
-            'v_pa': torch.tensor(convert(0.043, 'l')),
-            'v_pu': torch.tensor(convert(0.808, 'l')),
-            'v_lv': torch.tensor(convert(0.094, 'l')),
-            'v_ao': torch.tensor(convert(0.133, 'l')),
-            'v_vc': torch.tensor(convert(0.330, 'l')),
-            'v_rv': torch.tensor(convert(0.090, 'l')),
-        }
-
-        init_outputs = self.pressures_volumes(torch.tensor(0.), states)
-        self.flow_rates(init_outputs, static=True)
-        x_0 = self.ode_state_tensor(init_outputs)
-
-        # sol = solve_ivp(
-        #     self, [0, 2], x_0, method='RK45', dense_output=True,
-        #     max_step=1e-4,
-        #     )
-        t = torch.linspace(0, t_final, int(t_final*resolution) + 1)
-        if adjoint:
-            solver = odeint_adjoint
-        else:
-            solver = odeint
-        sol = solver(
-            self, 
-            x_0, 
-            t, 
-            method='dopri5', 
-            rtol=1e-6, 
-            atol=1e-6, 
-            options={'max_step': 1e-2},
+        states = super().init_states(
+            r_pa=r_pa,
+            r_pu=r_pu,
+            r_lv=r_lv,
+            r_ao=r_ao,
+            r_rv=r_rv,
         )
 
-        return t, sol
+        # Also compute initial flow rates assuming quasi-steady state
+        init_outputs = self.pressures_volumes(torch.tensor(0.), states, p_pl)
+        self.flow_rates(init_outputs, static=True)
+
+        states = {
+            key: val for key, val in init_outputs.items() 
+            if key in self.state_names
+        }
+
+        return states
 
 class JallonHeartLungs(ODEBase):
     """Jallon model of heart and lungs (combined cardiovascular and 
@@ -844,7 +888,7 @@ class JallonHeartLungs(ODEBase):
         super().__init__(*args, **kwargs)
         self.resp_pattern = RespiratoryPatternGenerator()
         self.resp = PassiveRespiratorySystem()
-        self.cvs = SmithCardioVascularSystem()
+        self.cvs = SmithCardioVascularSystem(p_pl_is_input=True)
 
         # Jallon CVS model modifications
         with torch.no_grad():
@@ -884,88 +928,34 @@ class JallonHeartLungs(ODEBase):
             dict[str, torch.Tensor]: Model outputs
         """
 
-        # print(t)
-        # print(states)
-        
         # Run respiratory model
         resp_outputs = self.resp.model(t, states)
-
-        # Update parameters of cardiovascular model
-        with torch.no_grad():
-            self.cvs.p_pl.copy_(resp_outputs['p_pl'])
-
-        cvs_outputs = self.cvs.model(t, states)
-
-        # Update parameters of respiratory pattern generator
-        with torch.no_grad():
-            self.resp_pattern.dv_alv_dt.copy_(resp_outputs['dv_alv_dt'])
-
-        resp_pattern_outputs = self.resp_pattern.model(t, states)
+        # Run cardiovascular model
+        cvs_outputs = self.cvs.model(t, states, resp_outputs['p_pl'])
+        # Run respiratory pattern generator
+        resp_pattern_outputs = self.resp_pattern.model(t, states, resp_outputs['dv_alv_dt'])
 
         all_outputs = states | resp_outputs | cvs_outputs | resp_pattern_outputs
 
         return all_outputs
 
-    def simulate(
-        self, 
-        t_final: float, 
-        resolution: int,
-        adjoint: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Simulate Jallon heart/lung model. Returns regularly spaced time and 
-        state tensors. Irregularly spaced outputs available in self.trajectory.
-
-        Args:
-            t_final (float): Final time (s)
-            resolution (int): State output resolution (Hz)
-            adjoint (bool): Use adjoint integrator
+    def init_states(self) -> dict[str, torch.Tensor]:
+        """Return initial values of ODE states.
 
         Returns:
-            Tuple containing:
-            - t (torch.Tensor): Time tensor
-            - sol (torch.Tensor): State tensor
+            dict[str, torch.Tensor]: Initial ODE states
         """
-        
-        super().simulate()
 
-        states = {
-            # Blood volume: should total 5.5
-            'v_pa': torch.tensor(convert(0.1875, 'l')),
-            'v_pu': torch.tensor(convert(0.80, 'l')),
-            'v_lv': torch.tensor(convert(0.135, 'l')),
-            'v_ao': torch.tensor(convert(0.9, 'l')),
-            'v_vc': torch.tensor(convert(3.35, 'l')),
-            'v_rv': torch.tensor(convert(0.1275, 'l')),
-            # Jallon 2009, Table 1:
-            'v_alv': torch.tensor(convert(0.5, 'l')),
-            'p_mus': torch.tensor(0.0),
-            'x': torch.tensor(-0.6),
-            'y': torch.tensor(0.0),
-        }
-
-        # Commented out as not using inertial valves
-        # init_outputs = self.cvs.pressures_volumes(torch.tensor(0.), states)
-        # self.cvs.flow_rates(init_outputs, static=True)
-
-        x_0 = self.ode_state_tensor(states)
-        
-        v_tot = convert(x_0[:6].sum(), to='l')
-        if self.verbose:
-            print(f'Total blood volume: {v_tot.item():.3f}l')
-
-        t = torch.linspace(0, t_final, int(t_final*resolution) + 1)
-        if adjoint:
-            solver = odeint_adjoint
-        else:
-            solver = odeint
-        sol = solver(
-            self, 
-            x_0, 
-            t, 
-            method='dopri5', 
-            rtol=1e-9,
-            atol=1e-6,
-            options={'max_step': 1e-2},
+        cvs_states = self.cvs.init_states(
+            r_pa=0.034,
+            r_pu=0.145,
+            r_lv=0.025,
+            r_ao=0.164,
+            r_rv=0.023,
         )
+        resp_states = self.resp.init_states()
+        resp_pattern_states = self.resp_pattern.init_states()
 
-        return t, sol
+        init_states = cvs_states | resp_states | resp_pattern_states
+
+        return init_states

@@ -47,7 +47,9 @@ smith_2007_cvs = {
     'e.a': tensor(1.),
     'e.b': tensor(80.),
     'e.c': tensor(0.3750),
-    'e.hr': tensor(80),
+    'e.hr': tensor(80.),
+
+    'v_tot': tensor(convert(5.5, 'l')),
 }
 
 paeme_2011_cvs = {
@@ -72,7 +74,7 @@ paeme_2011_cvs = {
     'vc.e_es': tensor(convert(0.0059, 'mmHg s/ml')),
     'pa.e_es': tensor(convert(0.3690, 'mmHg s/ml')),
     'pu.e_es': tensor(convert(0.0073, 'mmHg s/ml')),
-    'ao.e_es': tensor(convert(0.6913, 'mmHg s/ml')),
+    'ao.e_es': tensor(convert(0.6913, 'mmHg s/ml')),  # 0.0 in Paeme 2011?
 
     'lvf.v_d': tensor(0.0),
     'rvf.v_d': tensor(0.0),
@@ -84,8 +86,8 @@ paeme_2011_cvs = {
 
     'lvf.v_0': tensor(0.0),
     'rvf.v_0': tensor(0.0),
-    'spt.v_0': convert(tensor(2.0), 'ml'),
-    'pcd.v_0': convert(tensor(200.0), 'ml'),
+    'spt.v_0': tensor(convert(2.0, 'ml')),
+    'pcd.v_0': tensor(convert(200.0, 'ml')),
 
     'lvf.lam': tensor(convert(0.033, '1/ml')),
     'rvf.lam': tensor(convert(0.023, '1/ml')),
@@ -99,6 +101,8 @@ paeme_2011_cvs = {
 
     'e.a': tensor(1.),
     'e.b': tensor(80.),
-    'e.c': tensor(0.3750),
-    'e.hr': tensor(80),
+    'e.c': tensor(0.375),
+    'e.hr': tensor(80.),
+
+    'v_tot': tensor(convert(1.5, 'l')),  # 5.5 in Paeme 2011 but only simulates stressed volume?
 }

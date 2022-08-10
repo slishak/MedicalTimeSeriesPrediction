@@ -3,13 +3,13 @@ from typing import ClassVar, Optional
 
 import torch
 from torch import nn
+from torchdiffeq import odeint, odeint_adjoint
 
 from biophysical_models.unit_conversions import convert
 
 
 class ODEBase(ABC, nn.Module):
     state_names: ClassVar[list[str]]
-    input_names: ClassVar[list[str]] = []
 
     """Base class for ODE problems.
     
@@ -102,17 +102,64 @@ class ODEBase(ABC, nn.Module):
         """
         pass
 
-    def simulate(self):
-        """To be extended in child classes.
+    @abstractmethod
+    def init_states(self) -> dict[str, torch.Tensor]:
+        """To be implemented in subclass. Initial states of ODE.
         """
+        pass
+
+    def simulate(
+        self,
+        t_final: float, 
+        resolution: int,
+        adjoint: bool = False,
+        rtol: float = 1e-6,
+        atol: float = 1e-6,
+        max_step: float = 1e-2,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Simulate model. Returns regularly spaced time and state tensors. 
+        Outputs at integration steps available in self.trajectory.
+
+        Args:
+            t_final (float): Final time (s)
+            resolution (int): State output resolution (Hz)
+            adjoint (bool): Use adjoint integrator
+            rtol (float): Relative tolerance. Defaults to 1e-6.
+            atol (float): Absolute tolerance. Defaults to 1e-6.
+            max_step (float): Maximum ODE step. Defaults to 1e-2.
+
+        Returns:
+            Tuple containing:
+            - t (torch.Tensor): Time tensor
+            - sol (torch.Tensor): State tensor
+        """
+
         self.trajectory = []
+        states = self.init_states()
+        x_0 = self.ode_state_tensor(states)
+
+        t = torch.linspace(0, t_final, t_final*resolution + 1)
+        if adjoint:
+            solver = odeint_adjoint
+        else:
+            solver = odeint
+        sol = solver(
+            self, 
+            x_0, 
+            t, 
+            method='dopri5', 
+            rtol=rtol, 
+            atol=atol, 
+            options={'max_step': max_step},
+        )
+
+        return t, sol
 
     def callback_accept_step(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor):
         """Called by torchdiffeq at the end of a successful step. Used to 
         build outputs (irregularly-spaced grid) in self.trajectory
 
-        TODO: needs https://github.com/rtqichen/torchdiffeq/pull/206 to be 
-        merged
+        NOTE: Only works with torchdiffeq from master branch
 
         Args:
             t (torch.Tensor): Time (s)
@@ -411,7 +458,6 @@ class RespiratoryPatternGenerator(ODEBase):
     (Jallon, 2009)"""
 
     state_names: ClassVar[list[str]] = ['x', 'y']
-    input_names: ClassVar[list[str]] = ['dv_alv_dt']
 
     def __init__(
         self, 
@@ -420,9 +466,9 @@ class RespiratoryPatternGenerator(ODEBase):
         b: float = -3, 
         alpha: float = 1,
     ):
-        """Initialise
+        """Initialise model.
 
-        self.dv_alv_dt should be set by the top level model, from the 
+        dv_alv_dt should be set by the top level model, from the 
         cardiovascular system model.
 
         Args:
@@ -439,20 +485,24 @@ class RespiratoryPatternGenerator(ODEBase):
         self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
         self.alpha = nn.Parameter(torch.as_tensor(alpha), requires_grad=False)
 
-        # Input from other models
-        self.dv_alv_dt = nn.Parameter(torch.as_tensor(0.0), requires_grad=False)
-
-    def model(self, t: torch.Tensor, states: torch.Tensor) -> dict[str, torch.Tensor]:
+    def model(
+        self, 
+        t: torch.Tensor, 
+        states: dict[str, torch.Tensor],
+        dv_alv_dt: torch.Tensor = torch.tensor(0.0),
+    ) -> dict[str, torch.Tensor]:
         """Derivatives of central respiratory pattern generator
 
         Args:
             t (torch.Tensor): Time (s)
             states (torch.Tensor):  ODE states formatted as dict
+            dv_alv_dt (torch.Tensor, optional): Input to ODE. Defaults to 0.0.
 
         Returns:
             dict[str, torch.Tensor]:  ODE derivatives formatted as dict
         """
-        dx_dt = self.alpha * (self.lienard(states['x'], states['y']) - self.hb * self.dv_alv_dt)
+
+        dx_dt = self.alpha * (self.lienard(states['x'], states['y']) - self.hb * dv_alv_dt)
         dy_dt = self.alpha * states['x']
         
         return {'dx_dt': dx_dt, 'dy_dt': dy_dt}
@@ -469,3 +519,15 @@ class RespiratoryPatternGenerator(ODEBase):
         """
         f = (self.a * y**2 + self.b * y) * (x + y)
         return f
+
+    def init_states(self) -> dict[str, torch.Tensor]:
+        """Initial states of Lienard system
+
+        Returns:
+            dict[str, torch.Tensor]: Initial ODE states
+        """
+
+        return {
+            'x': torch.tensor(-0.6),
+            'y': torch.tensor(0.0),
+        }
