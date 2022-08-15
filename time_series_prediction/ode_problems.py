@@ -16,7 +16,7 @@ def vdp(
 ) -> np.ndarray:
     """Forced Van der Pol oscillator
 
-    d2x/dt2 - mu(1-x^2) dx/dt  + x - A sin(omega_1*t) + B sin(omega_2*t)
+    d2x/dt2 - mu(1-x^2) dx/dt  + x - A sin(omega_1*t) + B sin(omega_2*t) = 0
 
     Args:
         t (float): Time
