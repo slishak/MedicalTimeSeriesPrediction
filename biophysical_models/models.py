@@ -307,12 +307,6 @@ class SmithCardioVascularSystem(ODEBase):
         else:
             p_pl = self.p_pl
 
-        # Pericardium pressure-volume relationship
-        # Eq. 11, 18, 14. Note p_pl (pleural cavity) is p_th (thoracic cavity)
-        v_pcd = states['v_lv'] + states['v_rv']
-        p_pcd = self.pcd.p_ed(v_pcd)
-        p_peri = p_pcd + p_pl
-
         # Evaluate model driving function
         e_t = self.e(t)
 
@@ -329,6 +323,12 @@ class SmithCardioVascularSystem(ODEBase):
         p_lvf = self.lvf.p(v_lvf, e_t) 
         p_rvf = self.rvf.p(v_rvf, e_t)
         p_spt = self.spt.p(v_spt, e_t)
+
+        # Pericardium pressure-volume relationship
+        # Eq. 11, 18, 14. Note p_pl (pleural cavity) is p_th (thoracic cavity)
+        v_pcd = states['v_lv'] + states['v_rv']
+        p_pcd = self.pcd.p_ed(v_pcd)
+        p_peri = p_pcd + p_pl
 
         # Eq. 12, 13
         p_lv = p_lvf + p_peri
