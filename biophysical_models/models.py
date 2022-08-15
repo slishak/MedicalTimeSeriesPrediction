@@ -35,7 +35,7 @@ class PassiveRespiratorySystem(ODEBase):
     
     (Jallon, 2009)"""
 
-    state_names: ClassVar[list[str]] = ['p_mus', 'v_alv']
+    state_names: ClassVar[list[str]] = ['v_alv']
 
     def __init__(
         self, 
@@ -44,9 +44,6 @@ class PassiveRespiratorySystem(ODEBase):
         r_ua: float = convert(5, 'cmH2O s/l'),
         r_ca: float = convert(1, 'cmH2O s/l'),
         v_th0: float = convert(2, 'l'),
-        lam: float = convert(1.5, 'mmHg'),
-        mu: float = convert(1.0, 'mmHg'),  # 1.08504
-        beta: float = 0.1,
     ):
         """Initialise
 
@@ -60,16 +57,6 @@ class PassiveRespiratorySystem(ODEBase):
             v_th0 (float, optional): Rib cage or intrathoracic volume at zero
                 pressure. Defaults to 2 l. Note: Jallon gives incorrect units 
                 of 1/l.
-            lam (float, optional): Positive constant to allow pleural pressure
-                to be set at physiological values. Defaults to 1.5 mmHg/s. 
-                Note: units not given in Jallon, assumed mmHg/s.
-            mu (float, optional): Offset to respiratory muscle pressure 
-                derivative with time. Defaults to 1 mmHg/s. Note that with this
-                implementation, a value of 1.08504 gives steady state
-                behaviour.
-            beta (float, optional): Integral control on respiratory muscle 
-                pressure to keep it at constant mean (prevents drift). 
-                Modification original in this work. Defaults to 0.1/s
         """
         super().__init__()
         self.e_alv = nn.Parameter(torch.as_tensor(e_alv), requires_grad=False)
@@ -77,9 +64,6 @@ class PassiveRespiratorySystem(ODEBase):
         self.r_ua = nn.Parameter(torch.as_tensor(r_ua), requires_grad=False)
         self.r_ca = nn.Parameter(torch.as_tensor(r_ca), requires_grad=False)
         self.v_th0 = nn.Parameter(torch.as_tensor(v_th0), requires_grad=False)
-        self.lam = nn.Parameter(torch.as_tensor(lam), requires_grad=False)
-        self.mu = nn.Parameter(torch.as_tensor(mu), requires_grad=False)
-        self.beta = nn.Parameter(torch.as_tensor(beta), requires_grad=False)
 
     def model(
         self, 
@@ -97,7 +81,6 @@ class PassiveRespiratorySystem(ODEBase):
         """
 
         # These are not states of this model, but states of the overall system
-        y = states['y']
         v_pcd = states['v_lv'] + states['v_rv']
         v_pu = states['v_pu']
         v_pa = states['v_pa']
@@ -106,14 +89,12 @@ class PassiveRespiratorySystem(ODEBase):
         v_th = v_bth + states['v_alv']
         p_pl = states['p_mus'] + self.e_cw * (v_th - self.v_th0)
 
-        dp_mus_dt = self.lam * y + self.mu - self.beta * states['p_mus']
         dv_alv_dt = -(p_pl + self.e_alv * states['v_alv']) / (self.r_ca + self.r_ua)
 
         outputs = {
             'p_pl': p_pl,
             'v_th': v_th,
             'v_bth': v_bth,
-            'dp_mus_dt': dp_mus_dt, 
             'dv_alv_dt': dv_alv_dt,
         }
 
@@ -129,7 +110,6 @@ class PassiveRespiratorySystem(ODEBase):
         # Jallon 2009, Table 1:
         return {
             'v_alv': torch.tensor(convert(0.5, 'l')),
-            'p_mus': torch.tensor(0.0),
         }
 
 class SmithCardioVascularSystem(ODEBase):

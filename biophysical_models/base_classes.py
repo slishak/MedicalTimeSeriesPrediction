@@ -454,7 +454,7 @@ class RespiratoryPatternGenerator(ODEBase):
     
     (Jallon, 2009)"""
 
-    state_names: ClassVar[list[str]] = ['x', 'y']
+    state_names: ClassVar[list[str]] = ['x', 'y', 'p_mus']
 
     def __init__(
         self, 
@@ -462,6 +462,9 @@ class RespiratoryPatternGenerator(ODEBase):
         a: float = -0.8, 
         b: float = -3, 
         alpha: float = 1,
+        lam: float = convert(1.5, 'mmHg'),
+        mu: float = convert(1.0, 'mmHg'),  # 1.08504
+        beta: float = 0.1,
     ):
         """Initialise model.
 
@@ -475,12 +478,25 @@ class RespiratoryPatternGenerator(ODEBase):
             b (float, optional): Lienard parameter. Defaults to -3.
             alpha (float, optional): Parameter to cover higher range of 
                 respiratory frequencies. Defaults to 1.
+            lam (float, optional): Positive constant to allow pleural pressure
+                to be set at physiological values. Defaults to 1.5 mmHg/s. 
+                Note: units not given in Jallon, assumed mmHg/s.
+            mu (float, optional): Offset to respiratory muscle pressure 
+                derivative with time. Defaults to 1 mmHg/s. Note that with this
+                implementation, a value of 1.08504 gives steady state
+                behaviour.
+            beta (float, optional): Integral control on respiratory muscle 
+                pressure to keep it at constant mean (prevents drift). 
+                Modification original in this work. Defaults to 0.1/s
         """
         super().__init__()
         self.hb = nn.Parameter(torch.as_tensor(hb), requires_grad=False)
         self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
         self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
         self.alpha = nn.Parameter(torch.as_tensor(alpha), requires_grad=False)
+        self.lam = nn.Parameter(torch.as_tensor(lam), requires_grad=False)
+        self.mu = nn.Parameter(torch.as_tensor(mu), requires_grad=False)
+        self.beta = nn.Parameter(torch.as_tensor(beta), requires_grad=False)
 
     def model(
         self, 
@@ -501,8 +517,9 @@ class RespiratoryPatternGenerator(ODEBase):
 
         dx_dt = self.alpha * (self.lienard(states['x'], states['y']) - self.hb * dv_alv_dt)
         dy_dt = self.alpha * states['x']
+        dp_mus_dt = self.lam * states['y'] + self.mu - self.beta * states['p_mus']
         
-        return {'dx_dt': dx_dt, 'dy_dt': dy_dt}
+        return {'dx_dt': dx_dt, 'dy_dt': dy_dt, 'dp_mus_dt': dp_mus_dt}
     
     def lienard(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Lienard function
@@ -527,4 +544,5 @@ class RespiratoryPatternGenerator(ODEBase):
         return {
             'x': torch.tensor(-0.6),
             'y': torch.tensor(0.0),
+            'p_mus': torch.tensor(0.0),
         }
