@@ -46,7 +46,6 @@ smith_2007_cvs = {
 
     'e.a': tensor(1.),
     'e.b': tensor(80.),
-    'e.c': tensor(0.3750),
     'e.hr': tensor(80.),
 
     'v_tot': tensor(convert(5.5, 'l')),
@@ -101,7 +100,6 @@ paeme_2011_cvs = {
 
     'e.a': tensor(1.),
     'e.b': tensor(80.),
-    'e.c': tensor(0.375),
     'e.hr': tensor(80.),
 
     'v_tot': tensor(convert(1.5, 'l')),  # 5.5 in Paeme 2011 but only simulates stressed volume?

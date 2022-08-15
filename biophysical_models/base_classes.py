@@ -419,7 +419,6 @@ class CardiacDriver(nn.Module):
         self, 
         a: float = 1.0, 
         b: float = 80.0, 
-        c: float = 0.375, 
         hr: float = 80.0,
     ):
         """Initialise
@@ -427,13 +426,11 @@ class CardiacDriver(nn.Module):
         Args:
             a (float, optional): Scale parameter. Defaults to 1.0
             b (float, optional): Slope parameter. Defaults to 80.0.
-            c (float, optional): Offset parameter. Defaults to 0.375.
             hr (float, optional): Heart rate (bpm). Defaults to 80.0.
         """
         super().__init__()
         self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
         self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
-        self.c = nn.Parameter(torch.as_tensor(c), requires_grad=False)
         self.hr = nn.Parameter(torch.as_tensor(hr), requires_grad=False)
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
@@ -447,7 +444,7 @@ class CardiacDriver(nn.Module):
         """
 
         t_wrapped = torch.remainder(t, 60/self.hr)
-        e = self.a * torch.exp(-self.b * (t_wrapped - self.c)**2)
+        e = self.a * torch.exp(-self.b * (t_wrapped - 30/self.hr)**2)
 
         return e
 
