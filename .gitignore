@@ -10,6 +10,7 @@
 
 # Plots
 *.html
+*.png
 
 # Data
 *.hdf5
