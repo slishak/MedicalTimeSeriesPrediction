@@ -1,12 +1,14 @@
 
 import pandas as pd
 import torch
+import plotly.io as pio
 from plotly.subplots import make_subplots
 from scipy.integrate import cumulative_trapezoid
 
 from biophysical_models.models import SmithCardioVascularSystem, JallonHeartLungs, InertialSmithCVS
 from biophysical_models.unit_conversions import convert
 
+pio.templates.default = "plotly_white"
 
 def plot_states(cvs, t_sol, sol, t, x):
     fig = make_subplots(len(cvs.state_names), 2, column_titles=['states', 'derivatives'], shared_xaxes='all')
@@ -102,8 +104,9 @@ def plot_outputs(df):
 
 if __name__ == '__main__':
     # cvs = SmithCardioVascularSystem()
+    # cvs = InertialSmithCVS()
     cvs = JallonHeartLungs()
-    t_sol, sol = cvs.simulate(50, 50)
+    t_sol, sol = cvs.simulate(60, 50)
 
     t, x, dx_dt, outputs = zip(*cvs.trajectory)
     t = torch.tensor(t)
@@ -118,20 +121,16 @@ if __name__ == '__main__':
     fig.write_html('cvs.html', auto_open=True)
 
     # Respiratory system plot
-    # if isinstance(cvs, JallonHeartLungs):
-    #     fig_r = make_subplots(rows=4, cols=1)
-    #     fig_r.add_scatter(x=df['t'], y=df['x'], name='x', row=1, col=1)
-    #     fig_r.add_scatter(x=df['t'], y=df['y'], name='y', row=1, col=1)
+    if isinstance(cvs, JallonHeartLungs):
+        fig_r = make_subplots(rows=4, cols=1)
+        fig_r.add_scatter(x=df['t'], y=df['x'], name='x', row=1, col=1)
+        fig_r.add_scatter(x=df['t'], y=df['y'], name='y', row=1, col=1)
         
-    #     fig_r.add_scatter(x=df['t'], y=df['p_mus'], name='p_mus', row=3, col=1)
-    #     fig_r.add_scatter(x=df['t'], y=cumulative_trapezoid(df['p_mus'], df['t']), name='int(p_mus)', row=3, col=1)
+        fig_r.add_scatter(x=df['t'], y=df['v_th'], name='v_th', row=3, col=1)
+        fig_r.add_scatter(x=df['t'], y=df['p_pl'], name='p_pl', row=4, col=1)
+        fig_r.add_scatter(x=df['t'], y=df['p_mus'], name='p_mus', row=4, col=1)
 
-
-    #     fig_r.add_scatter(x=df['t'], y=df['dv_alv_dt'], name='dv_alv_dt', row=4, col=1)
-    #     fig_r.add_scatter(x=df['t'], y=-df['p_pl']/(cvs.resp.r_ca.item() + cvs.resp.r_ua.item()), name='p_pl contrib', row=4, col=1)
-    #     fig_r.add_scatter(x=df['t'], y=-df['v_alv']*cvs.resp.e_alv.item()/(cvs.resp.r_ca.item() + cvs.resp.r_ua.item()), name='v_alv contrib', row=4, col=1)
-    #     fig_r.write_html('resp.html', auto_open=True)
-
+        fig_r.write_html('resp.html', auto_open=True)
 
 
 
