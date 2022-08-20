@@ -106,6 +106,7 @@ def generate_data(
     n: int = 2000,
     resolution: int = 10,
     noise: float = 0.0,
+    init_noise: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Generate data from an ODE, with an empty input vector.
 
@@ -124,6 +125,8 @@ def generate_data(
         resolution (int, optional): Number of points per second. Defaults to 
             10.
         noise (float, optional): Output noise covariance. Defaults to 0.0.
+        init_noise (float, optional): Noise to apply to initial conditions of
+            chaotic ODEs. Defaults to 0.0.
 
     Returns:
         Tuple containing
@@ -134,11 +137,11 @@ def generate_data(
     t_range = (0, (n-1)/resolution)
 
     if source == 'vdp':
-        state_0 = np.array([1, 0.3])
+        state_0 = np.array([1, 0.3]) + np.random.randn(2) * init_noise
         sol = solve_ivp(
             vdp, t_range, state_0, method='RK45', dense_output=True,
-            # args=(2.0, 0.8, 0.3, 0.2, 0.5),
-            args=(2.0, 0, 0, 0.2, 0.5),
+            args=(2.0, 0.8, 0.3, 0.2, 0.5),
+            # args=(2.0, 0, 0, 0.2, 0.5),
             )
         
         t_out = np.linspace(t_range[0], t_range[1], n)
@@ -150,7 +153,7 @@ def generate_data(
         ).T
 
     elif source == 'lorenz':
-        state_0 = np.array([0., 2., 20.])
+        state_0 = np.array([0., 2., 20.]) + np.random.randn(3) * init_noise
         sol = solve_ivp(
             lorenz, t_range, state_0, method='RK45', dense_output=True,
             # args=(2.0, 0.8, 0.3, 0.2, 0.5),
@@ -166,7 +169,7 @@ def generate_data(
         ).T
 
     elif source == 'rossler':
-        state_0 = np.array([1e-4, 1e-4, 1e-4])
+        state_0 = np.array([1e-4, 1e-4, 1e-4]) + np.random.randn(3) * init_noise
         sol = solve_ivp(
             rossler, t_range, state_0, method='RK45', dense_output=True,
             # args=(2.0, 0.8, 0.3, 0.2, 0.5),
@@ -198,7 +201,7 @@ def generate_data(
             'jallon': JallonHeartLungs,
         }
         model = models[source]()
-        t_out, y_full = model.simulate(int((n-1)/resolution), resolution)
+        t_out, y_full = model.simulate(t_range[1], resolution)
 
     y_full = y_full + torch.randn_like(y_full) * noise
     u_full = torch.zeros(
