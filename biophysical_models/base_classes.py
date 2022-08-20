@@ -138,7 +138,7 @@ class ODEBase(ABC, nn.Module):
         states = self.init_states()
         x_0 = self.ode_state_tensor(states)
 
-        t = torch.linspace(0, t_final, t_final*resolution + 1)
+        t = torch.linspace(0, t_final, int(t_final*resolution + 1))
         if adjoint:
             solver = odeint_adjoint
         else:
@@ -462,7 +462,7 @@ class RespiratoryPatternGenerator(ODEBase):
         a: float = -0.8, 
         b: float = -3, 
         alpha: float = 1,
-        lam: float = convert(1.5, 'mmHg'),
+        lam: float = convert(1.0, 'mmHg'),
         mu: float = convert(1.0, 'mmHg'),  # 1.08504
         beta: float = 0.1,
     ):
