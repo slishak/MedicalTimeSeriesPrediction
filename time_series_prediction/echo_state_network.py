@@ -13,10 +13,12 @@ class ESN:
         w_in: float = 1, 
         sparsity: float = 0.1, 
         spectral_radius: float = 0.99, 
+        leaking_rate: float = 1.0,
         n_neurons: int = 100, 
         n_outputs: int = 1,
         n_inputs: int = 1,
         f_activation: Callable = torch.special.expit,
+        bias: bool = False,
     ):
         """Initialise echo state network.
 
@@ -27,44 +29,56 @@ class ESN:
             sparsity (float, optional): Sparsity of reservoir. Defaults to 0.1.
             spectral_radius (float, optional): Spectral radius of reservoir. 
                 Defaults to 0.99.
+            leaking_rate (float, optional): Neuron leaking rate. Defaults to 
+                1.0.
             n_neurons (int, optional): Size of reservoir. Defaults to 100.
             n_outputs (int, optional): Number of ESN outputs. Defaults to 1.
             n_inputs (int, optional): Number of ESN inputs. Defaults to 1.
             f_activation (Callable, optional): Activation function. Defaults to
                 torch.special.expit.
+            bias (bool, optional): Whether to use a bias term. Defaults to 
+                True.
         """
         self.w_in = w_in
         self.sparsity = sparsity
         self.spectral_radius = spectral_radius
+        self.leaking_rate = leaking_rate
         self.n_neurons = n_neurons
         self.n_outputs = n_outputs
         self.n_inputs = n_inputs
         self.f_activation = f_activation
+        self.bias = bias
 
         self._generate()
 
-    def _generate(self):
+    def _generate(self, simple_scaling=False):
         """Generate reservoir matrices/vectors based on the given parameters"""
         
         # For now, saple input/output/backprop layers from same distribution
         layer_weight_dist = torch.distributions.Uniform(-self.w_in, self.w_in)
         self.input_weights = layer_weight_dist.sample(
-            [self.n_neurons, self.n_inputs]).to(settings.device)
+            [self.n_neurons, self.n_inputs + self.bias]).to(settings.device)
         self.backprop_weights = layer_weight_dist.sample(
             [self.n_neurons, self.n_outputs]).to(settings.device)
-        self.output_weights = layer_weight_dist.sample(
-            [self.n_outputs, self.n_neurons]).to(settings.device)
+        self.output_weights = None
 
         # Reservoir
         sparsity_dist = torch.distributions.Bernoulli(self.sparsity)
-        weight_dist = torch.distributions.Uniform(-1, 1)
+        if simple_scaling:
+            weight_dist = torch.distributions.Uniform(-1, 1)
+        else:
+            weight_dist = torch.distributions.Uniform(0, 1)
         s = sparsity_dist.sample([self.n_neurons, self.n_neurons]).to(settings.device)
         self.w = weight_dist.sample([self.n_neurons, self.n_neurons]).to(settings.device)
         self.w *= s
         
         L, V = torch.linalg.eig(self.w)
         max_eig = L.abs().max()
-        self.w *= self.spectral_radius / max_eig
+        self.w = self.w * self.spectral_radius / max_eig
+        if not simple_scaling:
+            sign_dist = torch.distributions.Bernoulli(0.5)
+            signs = sign_dist.sample([self.n_neurons, self.n_neurons]).to(settings.device) * 2 - 1
+            self.w = self.w * signs
 
     def forwards(
         self, 
@@ -85,13 +99,16 @@ class ESN:
             - torch.Tensor: next (predicted) output
         """
 
-        x = self.f_activation(
+        if self.bias:
+            inp = torch.cat([torch.tensor([1.0], device=settings.device), inp])
+
+        x = self.leaking_rate * self.f_activation(
             self.input_weights @ inp
             + self.w @ prev_state
             + self.backprop_weights @ prev_output
-            )
+        ) + (1 - self.leaking_rate) * prev_state
 
-        y = x @ self.output_weights
+        y = torch.cat([x, inp]) @ self.output_weights
         return x, y
 
     def predict(
@@ -165,22 +182,27 @@ class ESN:
         # Initialise with zeros
         x = torch.zeros((n_steps, self.n_neurons), device=settings.device)
 
+        if self.bias:
+            inputs = torch.cat([torch.ones((n_steps, 1), device=settings.device), inputs], 1)
+
         # Drive network with training data
         for i in range(1, n_steps):
-            x[i, :] = self.f_activation(
+            x[i, :] = self.leaking_rate * self.f_activation(
                 self.input_weights @ inputs[i, :]
                 + self.w @ x[i-1, :]
                 + self.backprop_weights @ outputs[i-1, :]
-            )
+            ) + (1 - self.leaking_rate) * x[i-1, :]
 
-        # Ridge regression: minimise ||y - phi * w||^2_2 +- alpha * ||w||^2_2
-        phi = torch.concat((x, inputs), 1)[n_discard:, :]
+        # Ridge regression: minimise ||y - phi * w||^2_2 + alpha * ||w||^2_2
+        phi = torch.cat((x, inputs), 1)[n_discard:, :]
         y = outputs[n_discard:, :]
 
         self.output_weights = torch.linalg.solve(
-            torch.matmul(phi.T, phi) + k_l2 * torch.eye(self.n_neurons, device=settings.device), 
+            torch.matmul(phi.T, phi) 
+            + k_l2 * torch.eye(
+                self.n_neurons + self.n_inputs + self.bias, device=settings.device), 
             torch.matmul(phi.T, y))
-        # self.output_weights = torch.pinverse(phi[n_discard:, :]) @ torch.tensor(outputs[n_discard:, :])
-        # self.output_weights, res, rank, sing = torch.linalg.lstsq(phi, y)
+
+        # self.y_train = torch.cat((x, inputs), 1) @ self.output_weights
 
         return x
