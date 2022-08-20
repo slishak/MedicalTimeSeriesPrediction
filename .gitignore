@@ -1,5 +1,7 @@
 .vscode/*
 
+dask-worker-space
+
 # Python
 *.pyc
 *.pkl
