@@ -234,16 +234,16 @@ class AD_EnKF:
             # TODO: Wire up t and input vector
             if self.neural_ode:
                 t = i_t * dt
-                x_i = odeint(self.transition_function, x_i, torch.tensor([t-dt, t]), method='euler', options={'step_size': dt/5})[-1]
+                x_hat = odeint(self.transition_function, x_i, torch.tensor([t-dt, t]), method='euler', options={'step_size': dt/5})[-1]
             else:
-                x_i = self.transition_function(None, x_i)
-            x_i = self.process_noise(x_i)
+                x_hat = self.transition_function(None, x_i)
+            x_hat = self.process_noise(x_hat)
             
             # Mean state
-            m_hat = x_i.mean(0)
+            m_hat = x_hat.mean(0)
 
             # Empirical covariance
-            x_centered = x_i - m_hat
+            x_centered = x_hat - m_hat
             c = (x_centered.T @ x_centered) / (self.n_particles + 1)
             c = c * rho
 
@@ -254,21 +254,18 @@ class AD_EnKF:
             k_hat = torch.linalg.solve(h_c_ht + r, c_ht.T).T
 
             # Analysis step
-            h_xhat = torch.mm(self.observation_matrix, x_i.T)
-            x_i = x_i + torch.mm(
+            h_xhat = torch.mm(self.observation_matrix, x_hat.T)
+            x_i = x_hat + torch.mm(
                 k_hat, 
-                self.observation_noise(obs[i_t-1, :].repeat(self.n_particles, 1)).T - h_xhat,
+                self.observation_noise(obs[i_t, :].repeat(self.n_particles, 1)).T - h_xhat,
             ).T
-            # for n in range(self.n_particles):
-            #     h_xhat = torch.mm(self.observation_matrix, x[t, n, :])
-            #     x[t, n, :] += torch.mm(k_hat, obs[t-1, :] + observation_noise_dist.sample((self.n_particles,)) - h_xhat)
-
+            
             # Likelihood
             h_mhat = self.observation_matrix @ m_hat
             likelihood_dist = torch.distributions.MultivariateNormal(
                 h_mhat, h_c_ht + r
             )
-            ll = ll + likelihood_dist.log_prob(obs[i_t-1, :])
+            ll = ll + likelihood_dist.log_prob(obs[i_t, :])
             x.append(x_i.detach())
 
         x = torch.stack(x)
@@ -328,9 +325,8 @@ class AD_EnKF:
                 None.
         """
 
-        lambda1 = lambda2 = lambda epoch: (epoch+1-lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
-
         if self._opt is None:
+            lambda1 = lambda2 = lambda epoch: (epoch+1-lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
             alpha = self.transition_function.parameters()
             beta = self.process_noise.parameters()
             self._opt = torch.optim.Adam([
@@ -381,8 +377,8 @@ class AD_EnKF:
                 t2 = t1
 
             # Training
-            ll_sum = 0
             x_0 = None
+            ll_sum = 0
             for j in range(0, obs_train.shape[0], subseq_len):
                 self._opt.zero_grad()
                 ll, x = self.log_likelihood(obs_train[j:j+subseq_len, :], x_0, dt=dt)
