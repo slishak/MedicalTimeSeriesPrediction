@@ -1,4 +1,5 @@
-from typing import Optional
+from typing import Optional, Callable
+from time import perf_counter
 
 import torch
 import numpy as np
@@ -6,6 +7,7 @@ from plotly import graph_objects as go
 from plotly import subplots
 from torch import nn
 from IPython.display import display
+from torchdiffeq import odeint
 
 from time_series_prediction import settings
 
@@ -98,6 +100,7 @@ class AD_EnKF:
         n_particles: int,
         init_state_distribution: Optional[torch.distributions.Distribution] = None,
         taper_radius: Optional[float] = None,
+        neural_ode: bool = False,
     ):
         """Learn the dynamics of a dataset using AD-EnKF, with linear state
         observations. The number of states and observations are defined by 
@@ -119,6 +122,9 @@ class AD_EnKF:
                 optional): Distribution of size [n_states, n_states]. Defaults 
                 to a MultivariateNormal distribution.
             taper_radius (float, optional): Tapering radius. Defaults to None.
+            neural_ode (bool, optional): Assume transition_function is a neural
+                ODE. Defaults to False, in which case transition_function 
+                computes the next discrete state
         """
 
         self.transition_function = transition_function
@@ -128,6 +134,7 @@ class AD_EnKF:
         self.n_observations, self.n_states = observation_matrix.shape
         self.n_particles = n_particles
         self.taper_radius = taper_radius
+        self.neural_ode = neural_ode
 
         if init_state_distribution is None:
             init_state_distribution = torch.distributions.MultivariateNormal(
@@ -180,12 +187,22 @@ class AD_EnKF:
         rho[z_gt1_lt2] = f2(z[z_gt1_lt2])
         return rho
 
-    def log_likelihood(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def log_likelihood(
+        self, 
+        obs: torch.Tensor, 
+        x_0: Optional[torch.Tensor] = None, 
+        dt: Optional[float] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute log likelihood of the current model generating the observations
 
         Args:
             obs (torch.Tensor): Observations to compute log likelihood of, 
                 with shape [n_steps, self.n_observations]
+            x_0 (torch.Tensor, optional): Initial state. Defaults to None,
+                in which case drawn from self.init_state_distribution.
+            dt (float, optional): Timestep between observations (obs_train, 
+                obs_test). Required if training a neural ODE. Defaults to 
+                None.
 
         Returns:
             Tuple containing
@@ -195,28 +212,38 @@ class AD_EnKF:
         """
 
         n_steps = obs.shape[0]
-        x = torch.zeros((n_steps, self.n_particles, self.n_states), device=settings.device)
-        
-        ll = torch.zeros(n_steps, device=settings.device)
+        x = []
+        ll = 0
 
         # Draw initial particles from initial state distribution
-        x[0, :, :] = self.init_state_distribution.sample((self.n_particles,)).to(settings.device)
+        if x_0 is None:
+            x_i = self.init_state_distribution.sample((self.n_particles,)).to(settings.device)
+        else:
+            x_i = x_0
+
+        if self.neural_ode and dt is None:
+            raise Exception('Must set dt if using neural ODE')
 
         r = self.observation_noise.cov_mat()
 
         # Tapering
         rho = self.taper_rho()
 
-        for t in range(1, n_steps):
+        for i_t in range(n_steps):
             # Forecast step
-            # TODO: Wire up input vector
-            x_hat = self.process_noise(self.transition_function(t, x[t-1, :, :].clone(), None))
+            # TODO: Wire up t and input vector
+            if self.neural_ode:
+                t = i_t * dt
+                x_i = odeint(self.transition_function, x_i, torch.tensor([t-dt, t]), method='euler', options={'step_size': dt/5})[-1]
+            else:
+                x_i = self.transition_function(None, x_i)
+            x_i = self.process_noise(x_i)
             
             # Mean state
-            m_hat = x_hat.mean(0)
+            m_hat = x_i.mean(0)
 
             # Empirical covariance
-            x_centered = x_hat - m_hat
+            x_centered = x_i - m_hat
             c = (x_centered.T @ x_centered) / (self.n_particles + 1)
             c = c * rho
 
@@ -227,10 +254,10 @@ class AD_EnKF:
             k_hat = torch.linalg.solve(h_c_ht + r, c_ht.T).T
 
             # Analysis step
-            h_xhat = torch.mm(self.observation_matrix, x_hat.T)
-            x[t, :, :] = x_hat + torch.mm(
+            h_xhat = torch.mm(self.observation_matrix, x_i.T)
+            x_i = x_i + torch.mm(
                 k_hat, 
-                self.observation_noise(obs[t-1, :].repeat(self.n_particles, 1)).T - h_xhat,
+                self.observation_noise(obs[i_t-1, :].repeat(self.n_particles, 1)).T - h_xhat,
             ).T
             # for n in range(self.n_particles):
             #     h_xhat = torch.mm(self.observation_matrix, x[t, n, :])
@@ -241,13 +268,16 @@ class AD_EnKF:
             likelihood_dist = torch.distributions.MultivariateNormal(
                 h_mhat, h_c_ht + r
             )
-            ll[t] = likelihood_dist.log_prob(obs[t-1, :])
+            ll = ll + likelihood_dist.log_prob(obs[i_t-1, :])
+            x.append(x_i.detach())
 
-        return ll.sum(), x
+        x = torch.stack(x)
+
+        return ll, x
 
     def train(
         self, 
-        obs: torch.Tensor, 
+        obs_train: torch.Tensor, 
         n_epochs: int = 50, 
         lr_decay: int = 1, 
         lr_hold: int = 10, 
@@ -256,6 +286,9 @@ class AD_EnKF:
         lr_alpha: float = 1e-2,
         lr_beta: float = 1e-1,
         subseq_len: Optional[int] = None,
+        obs_test: Optional[torch.Tensor] = None,
+        print_timing: bool = False,
+        dt: Optional[float] = False,
     ):
         """Train the transition function and the process noise models using
         AD-EnKF.
@@ -269,7 +302,7 @@ class AD_EnKF:
         again below the current cell.
 
         Args:
-            obs (torch.Tensor): Observations of process
+            obs_train (torch.Tensor): Observations of process for training.
             n_epochs (int, optional): Number of training epochs. Defaults to 
                 50.
             lr_decay (int, optional): Polynomial decay rate of learning rate. 
@@ -288,6 +321,11 @@ class AD_EnKF:
                 Defaults to 1e-1.
             subseq_len (float, optional): Subsequence length for truncated
                 backprop. Defaults to None (no truncation).
+            print_timing (bool, optional): Print timing info at each iteration.
+                Defaults to False.
+            dt (float, optional): Timestep between observations (obs_train, 
+                obs_test). Required if training a neural ODE. Defaults to 
+                None.
         """
 
         lambda1 = lambda2 = lambda epoch: (epoch+1-lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
@@ -302,9 +340,10 @@ class AD_EnKF:
             # From https://github.com/ymchen0/torchEnKF/blob/016b4f8412310c195671c81790d372bd6cd9dc95/examples/l96_NN_demo.py
             self._scheduler = torch.optim.lr_scheduler.LambdaLR(
                 self._opt, lr_lambda=[lambda1, lambda2])
+            self._epoch = 0
 
         if subseq_len is None:
-            subseq_len = obs.shape[0]
+            subseq_len = obs_train.shape[0]
 
         if progress_fig:
             if self._fig is None:
@@ -313,58 +352,95 @@ class AD_EnKF:
                 self._fig.update_layout(
                     title_text=f'Training: n={n_epochs}, lr_decay={lr_decay}, lr_hold={lr_hold}'
                 )
-                self._fig.update_yaxes(row=1, title_text='Log likelihood')
+                self._fig.update_yaxes(row=1, title_text='LL')
                 self._fig.update_yaxes(row=2, title_text='LR alpha', type='log')
                 self._fig.update_yaxes(row=3, title_text='LR beta', type='log')
                 self._fig.update_yaxes(row=4, title_text='Process noise')
-                self._fig.update_xaxes(row=4, title_text='Iterations')
+                self._fig.update_xaxes(row=4, title_text='Epochs')
                 self._fig.add_scatter(row=1, col=1, x=[], y=[], showlegend=False)
+                self._fig.add_scatter(row=1, col=1, x=[], y=[], showlegend=False, line_dash='dot')
                 self._fig.add_scatter(row=2, col=1, x=[], y=[], showlegend=False)
                 self._fig.add_scatter(row=3, col=1, x=[], y=[], showlegend=False)
                 self._fig.add_scatter(row=4, col=1, x=[], y=[], showlegend=False)
                 self._lines = self._fig.data
-                self._epoch = 0
             if display_fig:
                 display(self._fig)
 
-
         for i in range(n_epochs):
-            for j in range(0, obs.shape[0], subseq_len):
+
+            t1 = perf_counter()
+
+            # Testing
+            if obs_test is not None:
+                with torch.no_grad():
+                    ll_test, _ = self.log_likelihood(obs_test, dt=dt)
+                if print_timing:
+                    t2 = perf_counter()
+                    print(f'Test step: {t2-t1:.3f}s')
+            else:
+                t2 = t1
+
+            # Training
+            ll_sum = 0
+            x_0 = None
+            for j in range(0, obs_train.shape[0], subseq_len):
                 self._opt.zero_grad()
-                ll, _ = self.log_likelihood(obs[j:j+subseq_len, :])
+                ll, x = self.log_likelihood(obs_train[j:j+subseq_len, :], x_0, dt=dt)
                 (-ll).backward()
-            self._epoch += 1
-            with torch.no_grad():
-                if progress_fig:
-                    i_list = list(self._lines[0].x)
-                    ll_list = list(self._lines[0].y)
-                    lambda_alpha_list = list(self._lines[1].y)
-                    lambda_beta_list = list(self._lines[2].y)
-                    beta_list = list(self._lines[3].y)
+                ll_sum = ll_sum + ll.detach()
+                x_0 = x[-1, :, :].detach()
+                self._opt.step()
 
-                    i_list.append(self._epoch)
-                    ll_list.append(ll.detach().cpu().numpy())
-                    lambda_alpha_list.append(self._scheduler.get_last_lr()[0])
-                    lambda_beta_list.append(self._scheduler.get_last_lr()[1])
-                    beta_list.append(self.process_noise.param.detach().cpu().numpy()[0])
+            if print_timing:
+                t3 = perf_counter()
+                print(f'Test step: {t3-t2:.3f}s')
 
-                    for line in self._lines:
-                        line.x = i_list
-                    
-                    self._lines[0].y = ll_list
-                    self._lines[1].y = lambda_alpha_list
-                    self._lines[2].y = lambda_beta_list
-                    self._lines[3].y = beta_list
-                else:
-                    print(
-                        i, 
-                        ll.detach().cpu().numpy(), 
-                        self.process_noise.param.detach().cpu().numpy()[0],
-                    )
-            self._opt.step()
             self._scheduler.step()
 
-    def forward(self, x: torch.Tensor, include_process_noise: bool = False) -> torch.Tensor:
+            self._epoch += 1
+
+            if progress_fig:
+                i_list = list(self._lines[0].x)
+                ll_list = list(self._lines[0].y)
+                ll_test_list = list(self._lines[1].y)
+                lambda_alpha_list = list(self._lines[2].y)
+                lambda_beta_list = list(self._lines[3].y)
+                beta_list = list(self._lines[4].y)
+
+                i_list.append(self._epoch)
+                ll_list.append(ll_sum.cpu().numpy())
+                ll_test_list.append(ll_test.cpu().numpy() * obs_train.shape[0] / obs_test.shape[0])
+                lambda_alpha_list.append(self._scheduler.get_last_lr()[0])
+                lambda_beta_list.append(self._scheduler.get_last_lr()[1])
+                beta_list.append(self.process_noise.param.detach().cpu().numpy()[0])
+
+                for line in self._lines:
+                    line.x = i_list
+                
+                self._lines[0].y = ll_list
+                self._lines[1].y = ll_test_list
+                self._lines[2].y = lambda_alpha_list
+                self._lines[3].y = lambda_beta_list
+                self._lines[4].y = beta_list
+            else:
+                t4 = perf_counter()
+                print(
+                    self._epoch, 
+                    ll_sum.cpu().numpy(), 
+                    self.process_noise.param.detach().cpu().numpy()[0],
+                    t4-t1,
+                )
+                    
+            if print_timing:
+                t5 = perf_counter()
+                print(f'Total epoch: {t5-t1:.3f}s')
+
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        include_process_noise: bool = False, 
+        dt: Optional[float] = None,
+    ) -> torch.Tensor:
         """Call the transition function to predict the next state of a 
         sequence, given the current state. Optionally add process noise to the
         new state.
@@ -373,12 +449,14 @@ class AD_EnKF:
             x (torch.Tensor): Current state
             include_process_noise (bool, optional): Add process noise to 
                 transition. Defaults to False.
+            dt (float, optional): Timestep between observations. Required 
+                if transition_function is a neural ODE. Defaults to None.
 
         Returns:
             torch.Tensor: Next state
         """
-        # TODO: Wire up t, u
-        x_next = self.transition_function(None, x, None)
+        # TODO: Wire up t
+        x_next = self.transition_function(None, x)
         if include_process_noise:
             x_next = self.process_noise(x_next)
 
@@ -390,6 +468,7 @@ class AD_EnKF:
         n: int, 
         include_process_noise: bool = False, 
         include_observation_noise: bool = False,
+        dt: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
         """Predict the state and output of a sequence a number of steps into
         the future, given an initial state.
@@ -403,6 +482,8 @@ class AD_EnKF:
                 transition. Defaults to False.
             include_observation_noise (bool, optional): Add observation noise.
                 Defaults to False.
+            dt (float, optional): Timestep between observations. Required 
+                if transition_function is a neural ODE. Defaults to None.
 
         Returns:
             Tuple containing:
@@ -410,27 +491,46 @@ class AD_EnKF:
             - np.ndarray: AD-EnKF outputs
         """
 
-        x_kf = []
-        y_kf = []
+        if self.neural_ode:
+            if dt is None:
+                raise Exception('Must set dt if using neural ODE')
 
-        x_i = x_0
+            if not include_observation_noise:
+                t = torch.arange(0, (n+1)*dt, dt, device=settings.device)
+                x = odeint(self.transition_function, x_0, t)
+                y = torch.mm(self.observation_matrix, x.T).T
+                x_kf = x.detach().cpu().numpy()
+                y_kf = y.detach().cpu.numpy()
+            else:
+                raise NotImplementedError('todo')
+        else:
+            x_kf = []
+            y_kf = []
 
-        for i in range(n):
-            y_i = torch.mm(self.observation_matrix, x_i)
-            if include_observation_noise:
-                y_i = self.observation_noise(y_i)
+            x_i = x_0
 
-            x_kf.append(x_i.detach().cpu().numpy())
-            y_kf.append(y_i.detach().cpu().numpy())
-            
-            x_i = self.forward(x_i, include_process_noise)
+            for i in range(n):
+                y_i = torch.mm(self.observation_matrix, x_i.T).T
+                if include_observation_noise:
+                    y_i = self.observation_noise(y_i)
+
+                x_kf.append(x_i.detach().cpu().numpy())
+                y_kf.append(y_i.detach().cpu().numpy())
+                
+                x_i = self.forward(x_i, include_process_noise, dt)
 
         return np.array(x_kf), np.array(y_kf)
 
 
 class NeuralNet(nn.Module):
     """Simple neural network"""
-    def __init__(self, input_dim: int, output_dim: int, hidden_dims: list[int]):
+    def __init__(
+        self, 
+        input_dim: int, 
+        output_dim: int, 
+        hidden_dims: list[int], 
+        activation_function: Callable = torch.relu,
+    ):
         """Initialise
 
         Args:
@@ -441,51 +541,46 @@ class NeuralNet(nn.Module):
         super().__init__()
         self.first_layer = nn.Linear(input_dim, hidden_dims[0])
         self.last_layer = nn.Linear(hidden_dims[-1], output_dim)
+        self.activation_function = activation_function
         self.hidden_layers = nn.ModuleList()
         for dim_1, dim_2 in zip(hidden_dims[:-1], hidden_dims[1:]):
             self.hidden_layers.append(nn.Linear(dim_1, dim_2))
 
-    def forward(self, t: torch.Tensor, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
-        """Perform forward pass through neural network. Method signature
-        is formatted like a nonlinear ODE, but time and input tensors are
-        currently unused.
+    def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Perform forward pass through neural network.
 
         Args:
             t (torch.Tensor): Current time
             x (torch.Tensor): Current state
-            u (torch.Tensor): Current inputs
 
         Returns:
             torch.Tensor: Next state
         """
-        y = torch.relu(self.first_layer(x))
+        y = self.activation_function(self.first_layer(x))
         for layer in self.hidden_layers:
-            y = torch.relu(layer(y))
+            y = self.activation_function(layer(y))
         y = self.last_layer(y)
         return y
 
 
 class ResNet(NeuralNet):
     """Residual neural network"""
-    def forward(self, t: torch.Tensor, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
-        """Perform forward pass through neural network. Method signature
-        is formatted like a nonlinear ODE, but time and input tensors are
-        currently unused.
+    def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Perform forward pass through neural network.
 
         Args:
             t (torch.Tensor): Current time
             x (torch.Tensor): Current state
-            u (torch.Tensor): Current inputs
 
         Returns:
             torch.Tensor: Next state
         """
-        y = super().forward(t, x, u)
+        y = super().forward(t, x)
         return x + y
 
 
 class EulerStepNet(NeuralNet):
-    """Euler step network. Half-way between a ResNet and a Nerual ODE, just
+    """Euler step network. Half-way between a ResNet and a Neural ODE, just
     multiply the residual by a timestep such that the network approximately
     learns the derivative.
     """
@@ -498,41 +593,16 @@ class EulerStepNet(NeuralNet):
         super().__init__(*args, **kwargs)
         self.dt = dt
 
-    def forward(self, t: torch.Tensor, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
-        """Perform forward pass through neural network. Method signature
-        is formatted like a nonlinear ODE, but time and input tensors are
-        currently unused.
+    def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Perform forward pass through neural network.
 
         Args:
             t (torch.Tensor): Current time
             x (torch.Tensor): Current state
-            u (torch.Tensor): Current inputs
 
         Returns:
             torch.Tensor: Next state
         """
 
-        y = super().forward(t, x, u)
+        y = super().forward(t, x)
         return x + y * self.dt
-
-
-# From https://github.com/ymchen0/torchEnKF/blob/master/torchEnKF/nn_templates.py
-class L96_ODE_Net_2(nn.Module):
-    def __init__(self, x_dim):
-        super().__init__()
-        self.x_dim = x_dim
-        self.layer1 = nn.Conv1d(1, 72, 5, padding=2, padding_mode='circular')
-        # self.layer1b = nn.Conv1d(1, 24, 5, padding=2, padding_mode='circular')
-        # self.layer1c = nn.Conv1d(1, 24, 5, padding=2, padding_mode='circular')
-        self.layer2 = nn.Conv1d(48, 37, 5, padding=2, padding_mode='circular')
-        self.layer3 = nn.Conv1d(37, 1, 1)
-
-        # self.layer1 = nn,Conv1d(1,6,5)
-
-    def forward(self, u):
-        bs = u.shape[:-1] # (*bs, x_dim)
-        out = torch.relu(self.layer1(u.view(-1, self.x_dim).unsqueeze(-2))) # (bs, 1, x_dim) -> (bs, 72, x_dim)
-        out = torch.cat((out[...,:24,:], out[...,24:48,:] * out[...,48:,:]), dim=-2) # (bs, 72, x_dim) -> (bs, 48, x_dim)
-        out = torch.relu(self.layer2(out)) # (bs, 48, x_dim) -> (bs, 37, x_dim)
-        out = self.layer3(out).squeeze(-2).view(*bs, self.x_dim) # (bs, 37, x_dim) -> (bs, 1, x_dim) -> (*bs, x_dim)
-        return out
