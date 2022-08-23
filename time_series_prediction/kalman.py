@@ -97,6 +97,7 @@ class AD_EnKF:
         process_noise: NoiseModel,
         n_particles: int,
         init_state_distribution: Optional[torch.distributions.Distribution] = None,
+        taper_radius: Optional[float] = None,
     ):
         """Learn the dynamics of a dataset using AD-EnKF, with linear state
         observations. The number of states and observations are defined by 
@@ -117,6 +118,7 @@ class AD_EnKF:
             init_state_distribution (torch.distributions.Distribution, 
                 optional): Distribution of size [n_states, n_states]. Defaults 
                 to a MultivariateNormal distribution.
+            taper_radius (float, optional): Tapering radius. Defaults to None.
         """
 
         self.transition_function = transition_function
@@ -125,6 +127,7 @@ class AD_EnKF:
         self.process_noise = process_noise
         self.n_observations, self.n_states = observation_matrix.shape
         self.n_particles = n_particles
+        self.taper_radius = taper_radius
 
         if init_state_distribution is None:
             init_state_distribution = torch.distributions.MultivariateNormal(
@@ -135,6 +138,47 @@ class AD_EnKF:
         self._opt = None
         self._scheduler = None
         self._fig = None
+
+    def taper_rho(self) -> torch.Tensor:
+        """Covariance tapering matrix - defined in equation SM4.3 of AD-EnKF 
+        paper. Also see Gaspari and Cohn, 1999
+
+        Returns: 
+            torch.Tensor: Tapering matrix
+        """
+
+        def f1(x):
+            return (
+                1 
+                - (5/3) * x**2
+                + (5/8) * x**3
+                + (1/2) * x**4
+                - (1/4) * x**5
+            )
+
+        def f2(x):
+            return (
+                4 
+                - 5 * x
+                + (5/3) * x**2
+                + (5/8) * x**3
+                - (1/2) * x**4
+                + (1/12) * x**5
+                - 2/(3*x)
+            )
+
+        if self.taper_radius is None:
+            return torch.ones((self.n_states, self.n_states), device=settings.device)
+
+        inds = torch.arange(0, self.n_states, device=settings.device)
+        i, j = torch.meshgrid(inds, inds, indexing='ij')
+        z = torch.abs(i - j) / self.taper_radius
+        rho = torch.zeros_like(z, dtype=torch.float)
+        z_lt1 = z < 1
+        z_gt1_lt2 = torch.logical_and(z >= 1, z < 2)
+        rho[z_lt1] = f1(z[z_lt1])
+        rho[z_gt1_lt2] = f2(z[z_gt1_lt2])
+        return rho
 
     def log_likelihood(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute log likelihood of the current model generating the observations
@@ -160,6 +204,9 @@ class AD_EnKF:
 
         r = self.observation_noise.cov_mat()
 
+        # Tapering
+        rho = self.taper_rho()
+
         for t in range(1, n_steps):
             # Forecast step
             # TODO: Wire up input vector
@@ -170,20 +217,21 @@ class AD_EnKF:
 
             # Empirical covariance
             x_centered = x_hat - m_hat
-            c_hat = (x_centered.T @ x_centered) / (self.n_particles + 1)
+            c = (x_centered.T @ x_centered) / (self.n_particles + 1)
+            c = c * rho
 
             # Kalman gain
-            c_ht = torch.mm(c_hat, self.observation_matrix.T)
+            c_ht = torch.mm(c, self.observation_matrix.T)
             h_c_ht = torch.mm(self.observation_matrix, c_ht)
             # k_hat = torch.mm(c_ht, torch.linalg.inv(h_c_ht + r))
-            k_hat = torch.linalg.solve(h_c_ht + r, c_ht).T
+            k_hat = torch.linalg.solve(h_c_ht + r, c_ht.T).T
 
             # Analysis step
-            # TODO: These are both reversed compared to paper - does it matter?
-            h_xhat = torch.mm(x_hat, self.observation_matrix)
+            h_xhat = torch.mm(self.observation_matrix, x_hat.T)
             x[t, :, :] = x_hat + torch.mm(
-                self.observation_noise(obs[t-1, :].repeat(self.n_particles, 1)) - h_xhat, 
-                k_hat)
+                k_hat, 
+                self.observation_noise(obs[t-1, :].repeat(self.n_particles, 1)).T - h_xhat,
+            ).T
             # for n in range(self.n_particles):
             #     h_xhat = torch.mm(self.observation_matrix, x[t, n, :])
             #     x[t, n, :] += torch.mm(k_hat, obs[t-1, :] + observation_noise_dist.sample((self.n_particles,)) - h_xhat)
@@ -205,6 +253,9 @@ class AD_EnKF:
         lr_hold: int = 10, 
         progress_fig: bool = True, 
         display_fig: bool = True,
+        lr_alpha: float = 1e-2,
+        lr_beta: float = 1e-1,
+        subseq_len: Optional[int] = None,
     ):
         """Train the transition function and the process noise models using
         AD-EnKF.
@@ -231,6 +282,12 @@ class AD_EnKF:
             display_fig (bool, optional): In a notebook context, display the 
                 figure created (if progress_fig is True) below this cell. 
                 Defaults to True.
+            lr_alpha (float, optional): Learning rate of transition function
+                parameters. Defaults to 1e-2.
+            lr_beta (float, optional): Learning rate of process noise scale.
+                Defaults to 1e-1.
+            subseq_len (float, optional): Subsequence length for truncated
+                backprop. Defaults to None (no truncation).
         """
 
         lambda1 = lambda2 = lambda epoch: (epoch+1-lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
@@ -239,54 +296,65 @@ class AD_EnKF:
             alpha = self.transition_function.parameters()
             beta = self.process_noise.parameters()
             self._opt = torch.optim.Adam([
-                {'params': alpha, 'lr': 1e-2}, 
-                {'params': beta, 'lr': 1e-1},
+                {'params': alpha, 'lr': lr_alpha},
+                {'params': beta, 'lr': lr_beta},
             ])
             # From https://github.com/ymchen0/torchEnKF/blob/016b4f8412310c195671c81790d372bd6cd9dc95/examples/l96_NN_demo.py
             self._scheduler = torch.optim.lr_scheduler.LambdaLR(
                 self._opt, lr_lambda=[lambda1, lambda2])
 
+        if subseq_len is None:
+            subseq_len = obs.shape[0]
+
         if progress_fig:
             if self._fig is None:
                 self._fig = go.FigureWidget(
-                    subplots.make_subplots(rows=3, cols=1, shared_xaxes=True))
+                    subplots.make_subplots(rows=4, cols=1, shared_xaxes=True))
                 self._fig.update_layout(
                     title_text=f'Training: n={n_epochs}, lr_decay={lr_decay}, lr_hold={lr_hold}'
                 )
                 self._fig.update_yaxes(row=1, title_text='Log likelihood')
-                self._fig.update_yaxes(row=2, title_text='LR')
-                self._fig.update_yaxes(row=3, title_text='Process noise')
-                self._fig.add_scatter(row=1, col=1, x=[], y=[])
-                self._fig.add_scatter(row=2, col=1, x=[], y=[])
-                self._fig.add_scatter(row=3, col=1, x=[], y=[])
+                self._fig.update_yaxes(row=2, title_text='LR alpha', type='log')
+                self._fig.update_yaxes(row=3, title_text='LR beta', type='log')
+                self._fig.update_yaxes(row=4, title_text='Process noise')
+                self._fig.update_xaxes(row=4, title_text='Iterations')
+                self._fig.add_scatter(row=1, col=1, x=[], y=[], showlegend=False)
+                self._fig.add_scatter(row=2, col=1, x=[], y=[], showlegend=False)
+                self._fig.add_scatter(row=3, col=1, x=[], y=[], showlegend=False)
+                self._fig.add_scatter(row=4, col=1, x=[], y=[], showlegend=False)
+                self._lines = self._fig.data
                 self._epoch = 0
             if display_fig:
                 display(self._fig)
 
 
         for i in range(n_epochs):
-            self._opt.zero_grad()
-            ll, _ = self.log_likelihood(obs)
-            (-ll).backward()
+            for j in range(0, obs.shape[0], subseq_len):
+                self._opt.zero_grad()
+                ll, _ = self.log_likelihood(obs[j:j+subseq_len, :])
+                (-ll).backward()
             self._epoch += 1
             with torch.no_grad():
                 if progress_fig:
-                    i_list = list(self._fig.data[0].x)
-                    ll_list = list(self._fig.data[0].y)
-                    lambda_list = list(self._fig.data[1].y)
-                    beta_list = list(self._fig.data[2].y)
+                    i_list = list(self._lines[0].x)
+                    ll_list = list(self._lines[0].y)
+                    lambda_alpha_list = list(self._lines[1].y)
+                    lambda_beta_list = list(self._lines[2].y)
+                    beta_list = list(self._lines[3].y)
 
                     i_list.append(self._epoch)
                     ll_list.append(ll.detach().cpu().numpy())
-                    lambda_list.append(self._scheduler.get_last_lr()[0])
+                    lambda_alpha_list.append(self._scheduler.get_last_lr()[0])
+                    lambda_beta_list.append(self._scheduler.get_last_lr()[1])
                     beta_list.append(self.process_noise.param.detach().cpu().numpy()[0])
 
-                    self._fig.data[0].x = i_list
-                    self._fig.data[1].x = i_list
-                    self._fig.data[2].x = i_list
-                    self._fig.data[0].y = ll_list
-                    self._fig.data[1].y = lambda_list
-                    self._fig.data[2].y = beta_list
+                    for line in self._lines:
+                        line.x = i_list
+                    
+                    self._lines[0].y = ll_list
+                    self._lines[1].y = lambda_alpha_list
+                    self._lines[2].y = lambda_beta_list
+                    self._lines[3].y = beta_list
                 else:
                     print(
                         i, 
@@ -348,7 +416,7 @@ class AD_EnKF:
         x_i = x_0
 
         for i in range(n):
-            y_i = torch.mm(x_i, self.observation_matrix)
+            y_i = torch.mm(self.observation_matrix, x_i)
             if include_observation_noise:
                 y_i = self.observation_noise(y_i)
 
