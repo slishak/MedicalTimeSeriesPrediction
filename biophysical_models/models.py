@@ -883,3 +883,74 @@ class JallonHeartLungs(ODEBase):
         init_states = cvs_states | resp_states | resp_pattern_states
 
         return init_states
+
+
+def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
+
+    class BloodPressureMetrics(cls):
+        state_names: ClassVar[list[str]] = cls.state_names + [
+            'p_aod', 'p_aos', 'p_aom', 'p_vcm'
+        ]
+
+        def __init__(self, *args, **kwargs):
+            assert kwargs.get('f_hr') is not None, "Must use dynamic HR for BP metrics"
+            super().__init__(*args, **kwargs)
+            self.moving_avg_weight = nn.Parameter(torch.tensor(2.0), requires_grad=False)
+            self.moving_avg_weight_s = nn.Parameter(torch.tensor(0.01), requires_grad=False)
+            self.moving_avg_weight_d = nn.Parameter(torch.tensor(0.05), requires_grad=False)
+            self.moving_avg_power_s = nn.Parameter(torch.tensor(6), requires_grad=False)
+            self.moving_avg_power_d = nn.Parameter(torch.tensor(2), requires_grad=False)
+            self.r_d = nn.Parameter(torch.tensor(0.05), requires_grad=False)
+
+        def model(
+            self, 
+            t: torch.Tensor, 
+            states: dict[str, torch.Tensor],
+        ) -> dict[str, torch.Tensor]:
+            outputs = super().model(t, states)
+
+            # Moving averages
+            outputs['dp_aom_dt'] = (outputs['p_ao'] - states['p_aom'])/self.moving_avg_weight
+            outputs['dp_vcm_dt'] = (outputs['p_vc'] - states['p_vcm'])/self.moving_avg_weight
+
+            # Systolic moving average
+            dp_aos_dt = (outputs['p_ao'] - states['p_aos']) * outputs['e_t']**self.moving_avg_power_s / self.moving_avg_weight_s
+            # Only update systolic moving average when volume is increasing
+            outputs['dp_aos_dt'] = torch.where(
+                outputs['dv_ao_dt'] > 0,
+                dp_aos_dt,
+                0.0
+            )
+
+            # Find end of diastole (just as e(t) starts to increase)
+            if cls is JallonHeartLungs:
+                b = self.cvs.e.b
+            else:
+                b = self.e.b
+            s_d = 0.5 - torch.sqrt(-torch.log(self.r_d) / b)
+            e_diastole = torch.exp(-b * (outputs['s_wrapped'] - s_d)**2)
+
+            # Diastolic moving average
+            dp_aod_dt = (outputs['p_ao'] - states['p_aod']) * e_diastole**self.moving_avg_power_d / self.moving_avg_weight_d
+
+            # Only update diastolic moving average when volume is decreasing
+            outputs['dp_aod_dt'] = torch.where(
+                outputs['dv_ao_dt'] < 0,
+                dp_aod_dt,
+                0.0
+            )
+
+
+            return outputs
+
+        def init_states(self) -> dict[str, torch.Tensor]:
+            init_states = super().init_states()
+            init_outputs = super().model(torch.tensor(0.), init_states)
+            init_states['p_aom'] = torch.tensor(init_outputs['p_ao'])
+            init_states['p_aos'] = torch.tensor(init_outputs['p_ao'])
+            init_states['p_aod'] = torch.tensor(init_outputs['p_ao'])
+            init_states['p_vcm'] = torch.tensor(init_outputs['p_vc'])
+            
+            return init_states
+
+    return BloodPressureMetrics

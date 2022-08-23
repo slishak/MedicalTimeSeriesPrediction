@@ -5,7 +5,7 @@ import plotly.io as pio
 from plotly.subplots import make_subplots
 from scipy.integrate import cumulative_trapezoid
 
-from biophysical_models.models import SmithCardioVascularSystem, JallonHeartLungs, InertialSmithCVS
+from biophysical_models.models import SmithCardioVascularSystem, JallonHeartLungs, InertialSmithCVS, add_bp_metrics
 from biophysical_models.unit_conversions import convert
 
 pio.templates.default = "plotly_white"
@@ -61,16 +61,22 @@ def plot_outputs(df):
     fig.update_xaxes(row=3, col=4, matches=None)
 
     fig.update_yaxes(row=1, col=1, title_text='lvf/lv/ao/pu pressures (mmHg)')
-    for col in ['p_lvf', 'p_lv', 'p_ao', 'p_pu']:
-        fig.add_scatter(x=df['t'], y=convert(df[col], to='mmHg'), name=col, row=1, col=1)
+    for col in ['p_lvf', 'p_lv', 'p_ao', 'p_pu', 'p_aom', 'p_aos', 'p_aod']:
+        try:
+            fig.add_scatter(x=df['t'], y=convert(df[col], to='mmHg'), name=col, row=1, col=1)
+        except KeyError:
+            pass
 
     fig.update_yaxes(row=1, col=3, title_text='lvf/lv/ao/pu volumes (ml)')
     for col in ['v_lvf', 'v_lv', 'v_ao', 'v_pu']:
         fig.add_scatter(x=df['t'], y=convert(df[col], 'l', 'ml'), name=col, row=1, col=3)
 
     fig.update_yaxes(row=2, col=1, title_text='rvf/rv/pa/vc pressures (mmHg)')
-    for col in ['p_rvf', 'p_rv', 'p_pa', 'p_vc']:
-        fig.add_scatter(x=df['t'], y=convert(df[col], to='mmHg'), name=col, row=2, col=1)
+    for col in ['p_rvf', 'p_rv', 'p_pa', 'p_vc', 'p_vcm']:
+        try:
+            fig.add_scatter(x=df['t'], y=convert(df[col], to='mmHg'), name=col, row=2, col=1)
+        except KeyError:
+            pass
 
     fig.update_yaxes(row=2, col=3, title_text='rvf/rv/pa/vc volumes (ml)')
     for col in ['v_rvf', 'v_rv', 'v_pa', 'v_vc']:
@@ -103,9 +109,18 @@ def plot_outputs(df):
     return fig
 
 if __name__ == '__main__':
-    # cvs = SmithCardioVascularSystem()
-    # cvs = InertialSmithCVS()
-    cvs = JallonHeartLungs()
+
+    # cvs_class = SmithCardioVascularSystem
+    cvs_class = InertialSmithCVS
+    # cvs_class = JallonHeartLungs
+
+    cvs_class = add_bp_metrics(cvs_class)
+
+    # f_hr = None
+    f_hr = lambda t: 80 + 20 * torch.tanh(0.3 * (t - 40))
+
+    cvs = cvs_class(f_hr=f_hr)
+
     t_sol, sol = cvs.simulate(60, 50)
 
     t, x, dx_dt, outputs = zip(*cvs.trajectory)
@@ -122,7 +137,7 @@ if __name__ == '__main__':
 
     # Respiratory system plot
     if isinstance(cvs, JallonHeartLungs):
-        fig_r = make_subplots(rows=4, cols=1)
+        fig_r = make_subplots(rows=4, cols=1, shared_xaxes='all')
         fig_r.add_scatter(x=df['t'], y=df['x'], name='x', row=1, col=1)
         fig_r.add_scatter(x=df['t'], y=df['y'], name='y', row=1, col=1)
         
@@ -132,5 +147,28 @@ if __name__ == '__main__':
 
         fig_r.write_html('resp.html', auto_open=True)
 
+    if 'p_aod' in cvs.state_names:
+        fig_metrics = make_subplots(rows=4, cols=1, specs=[[{}], [{}], [{}], [{'secondary_y': True}]], shared_xaxes='all')
+        fig_metrics.add_scatter(x=df['t'], y=df['p_ao'], line_color='black', row=1, col=1, showlegend=False)
+        fig_metrics.add_scatter(x=df['t'], y=df['p_aom'], line_color='black', line_dash='dash', row=1, col=1, showlegend=False)
+        fig_metrics.add_scatter(x=df['t'], y=df['p_aos'], line_color='red', row=1, col=1, showlegend=False)
+        fig_metrics.add_scatter(x=df['t'], y=df['p_aod'], line_color='blue', row=1, col=1, showlegend=False)
 
+        fig_metrics.add_scatter(x=df['t'], y=df['p_vc'], line_color='black', row=2, col=1, showlegend=False)
+        fig_metrics.add_scatter(x=df['t'], y=df['p_vcm'], line_color='black', line_dash='dash', row=2, col=1, showlegend=False)
+
+        fig_metrics.add_scatter(x=df['t'], y=df['dv_ao_dt'], line_color='black', row=3, col=1, showlegend=False)
+        
+        fig_metrics.add_scatter(x=df['t'], y=df['e_t'], line_color='red', row=4, col=1, showlegend=False, secondary_y=True)
+        fig_metrics.add_scatter(x=t, y=f_hr(t), line_color='black', row=4, col=1, showlegend=False)
+
+        fig_metrics.update_yaxes(title_text=r'$P_{ao}$', row=1)
+        fig_metrics.update_yaxes(title_text=r'$P_{vc}$', row=2)
+        fig_metrics.update_yaxes(title_text=r'$\frac{dV_{ao}}{dt}$', row=3)
+        fig_metrics.update_yaxes(title_text=r'HR', row=4, secondary_y=False)
+        fig_metrics.update_yaxes(title_text=r'$e(t)$', title_font_color='red', row=4, secondary_y=True)
+
+        fig_metrics.update_xaxes(title_text='t', row=4)
+
+        fig_metrics.write_html('metrics.html', auto_open=True, include_mathjax='cdn')
 
