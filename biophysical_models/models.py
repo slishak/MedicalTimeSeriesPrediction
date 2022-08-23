@@ -1,12 +1,10 @@
 from time import perf_counter
 import warnings
 from dataclasses import dataclass
-from typing import ClassVar, Union, Optional
+from typing import ClassVar, Union, Optional, Callable, Type
 
 import torch
-import pandas as pd
 from torch import nn
-from torchdiffeq import odeint, odeint_adjoint
 from scipy.optimize import root_scalar
 from xitorch.optimize import rootfinder
 from xitorch._utils.exceptions import ConvergenceWarning
@@ -14,6 +12,7 @@ from xitorch._utils.exceptions import ConvergenceWarning
 from biophysical_models.base_classes import (
     ODEBase, 
     CardiacDriver, 
+    DynamicCardiacDriver,
     Valve, 
     BloodVessel, 
     PressureVolume, 
@@ -119,7 +118,13 @@ class SmithCardioVascularSystem(ODEBase):
 
     state_names: ClassVar[list[str]] = ['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv']
 
-    def __init__(self, *args, p_pl_is_input=False, **kwargs):
+    def __init__(
+        self, 
+        *args, 
+        p_pl_is_input: bool = False, 
+        f_hr: Optional[Callable] = None, 
+        **kwargs,
+    ):
         """Initialise. All parameters passed to nn.Module. 
 
         Default parameter values from Smith, 2005.
@@ -127,6 +132,9 @@ class SmithCardioVascularSystem(ODEBase):
         Args:
             p_pl_is_input (bool, optional): Get pleural pressure from input,
                 otherwise create a parameter. Defaults to False.
+            f_hr (Callable, optional): Heart rate as a function of time. 
+                Defaults to None, in which case a constant heart rate model is
+                used.
         """
 
         super().__init__(*args, **kwargs)
@@ -166,7 +174,13 @@ class SmithCardioVascularSystem(ODEBase):
         self.ao = PressureVolume(convert(94, 'kPa/l'), convert(0.8, 'l'), None, None, None)
     
         # Cardiac pattern generator
-        self.e = CardiacDriver(hr=80.0)
+        if f_hr is None:
+            self.e = CardiacDriver(hr=80.0)
+            self.dynamic_hr = False
+        else:
+            self.e = DynamicCardiacDriver(hr=f_hr)
+            self.dynamic_hr = True
+            self.state_names = self.state_names + self.e.state_names
 
         # Total blood volume
         self.v_tot = nn.Parameter(torch.tensor(convert(5.5, 'l')), requires_grad=False)
@@ -288,8 +302,13 @@ class SmithCardioVascularSystem(ODEBase):
             p_pl = self.p_pl
 
         # Evaluate model driving function
-        e_t = self.e(t)
-
+        if self.dynamic_hr:
+            cardiac_driver_output = self.e.model(t, states)
+            e_t = cardiac_driver_output['e_t']
+        else:
+            e_t = self.e(t)
+            cardiac_driver_output = {'e_t': e_t}
+            
         # Ventricular pressure-volume relationship
         # t1 = perf_counter()
         v_spt = self.solve_v_spt(states['v_lv'], states['v_rv'], e_t)
@@ -328,12 +347,6 @@ class SmithCardioVascularSystem(ODEBase):
         # print(f'pv: {t2-t1:.2e}s')
 
         outputs = {
-            'v_pa': states['v_pa'], 
-            'v_pu': states['v_pu'], 
-            'v_lv': states['v_lv'],
-            'v_ao': states['v_ao'],
-            'v_vc': states['v_vc'], 
-            'v_rv': states['v_rv'],
             'e_t': e_t,
             'v_pcd': v_pcd,
             'p_pcd': p_pcd,
@@ -350,9 +363,8 @@ class SmithCardioVascularSystem(ODEBase):
             'p_ao': p_ao,
             'p_vc': p_vc,
             'p_spt': p_spt,
-        }
+        } | cardiac_driver_output | states
         
-
         return outputs
 
     def init_states(
@@ -396,6 +408,9 @@ class SmithCardioVascularSystem(ODEBase):
             'v_vc': r_vc * self.v_tot,
             'v_rv': r_rv * self.v_tot,
         }
+
+        if self.dynamic_hr:
+            states['s'] = torch.tensor(0.)
 
         return states
 
@@ -775,8 +790,20 @@ class JallonHeartLungs(ODEBase):
         RespiratoryPatternGenerator.state_names
     )
 
-    def __init__(self, *args, **kwargs):
-        """Initialise. All parameters passed to nn.Module. 
+    def __init__(
+        self, 
+        *args, 
+        f_hr: Optional[Callable] = None, 
+        **kwargs,
+    ):
+        """Initialise. 
+
+        Args:
+            f_hr (Callable, optional): Heart rate as a function of time. 
+                Defaults to None, in which case a constant heart rate model is
+                used.
+
+        All other parameters passed to nn.Module. 
 
         Default parameters from Smith (2007) with modifications from 
         Jallon (2009)
@@ -785,16 +812,16 @@ class JallonHeartLungs(ODEBase):
         super().__init__(*args, **kwargs)
         self.resp_pattern = RespiratoryPatternGenerator()
         self.resp = PassiveRespiratorySystem()
-        self.cvs = SmithCardioVascularSystem(p_pl_is_input=True)
+        self.cvs = SmithCardioVascularSystem(p_pl_is_input=True, f_hr=f_hr)
 
         # Jallon CVS model modifications
         with torch.no_grad():
             # Table 2 of Jallon 2009
-            self.cvs.spt.e_es.copy_(torch.tensor(convert(3750, 'mmHg s/l')))  # Wrong units in paper
-            self.cvs.spt.lam.copy_(torch.tensor(convert(35, '1/l')))
-            self.cvs.vc.e_es.copy_(torch.tensor(convert(2, 'mmHg s/l')))
-            # HR = 54bpm
-            self.cvs.e.hr.copy_(torch.tensor(54.0))
+            # self.cvs.spt.e_es.copy_(torch.tensor(convert(3750, 'mmHg s/l')))  # Wrong units in paper
+            # self.cvs.spt.lam.copy_(torch.tensor(convert(35, '1/l')))
+            # self.cvs.vc.e_es.copy_(torch.tensor(convert(2, 'mmHg s/l')))
+            # # HR = 54bpm
+            # self.cvs.e.hr.copy_(torch.tensor(54.0))
             # Eq 2.9, 2.10
             self.cvs.p_pl_affects_pu_and_pa.copy_(torch.tensor(True))
 
