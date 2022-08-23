@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar, Optional
+from typing import ClassVar, Optional, Callable
 
 import torch
 from torch import nn
@@ -447,6 +447,71 @@ class CardiacDriver(nn.Module):
         e = self.a * torch.exp(-self.b * (t_wrapped - 30/self.hr)**2)
 
         return e
+
+
+class DynamicCardiacDriver(ODEBase):
+
+    state_names : ClassVar[list[str]] = ['s']
+        
+    def __init__(
+        self, 
+        a: float = 1.0, 
+        b: float = 80.0, 
+        hr: Callable = lambda t: torch.tensor(80.)
+    ):
+
+        """Initialise
+
+        Args:
+            a (float, optional): Scale parameter. Defaults to 1.0
+            b (float, optional): Slope parameter. Defaults to 80.0.
+            hr (Callable, optional): Heart rate as a function of time 
+                (bpm). Defaults to hr(t) = 80.
+        """
+        super().__init__()
+        self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
+        self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
+        # Not used, just for parameter setting compatibility:
+        self.hr = nn.Parameter(torch.as_tensor(0.0), requires_grad=False)
+        self.f_hr = hr
+
+    def model(
+        self, 
+        t: torch.Tensor, 
+        states: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        """Derivatives of dynamic cardiac driver model
+
+        Args:
+            t (torch.Tensor): Time (s)
+            states (torch.Tensor):  ODE states formatted as dict
+
+        Returns:
+            dict[str, torch.Tensor]:  ODE derivatives formatted as dict
+        """
+
+        hr = self.f_hr(t)
+        ds_dt = hr / 60
+        s_wrapped = torch.remainder(states['s'], 1)
+        e = self.a * torch.exp(-self.b * (s_wrapped - 0.5)**2)
+
+        return {
+            'hr': hr,
+            'ds_dt': ds_dt,
+            's_wrapped': s_wrapped,
+            'e_t': e,
+        }
+
+    def init_states(self) -> dict[str, torch.Tensor]:
+        """Initial states of dynamic cardiac driver function
+
+        Returns:
+            dict[str, torch.Tensor]: Initial ODE states
+        """
+
+        return {
+            's': torch.tensor(0.0),
+        }
 
 
 class RespiratoryPatternGenerator(ODEBase):
