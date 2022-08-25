@@ -18,7 +18,7 @@ class ESN:
         n_outputs: int = 1,
         n_inputs: int = 1,
         f_activation: Callable = torch.special.expit,
-        bias: bool = False,
+        bias: bool = True,
     ):
         """Initialise echo state network.
 
@@ -116,11 +116,9 @@ class ESN:
         u: torch.Tensor, 
         x_0: torch.Tensor, 
         y_0: torch.Tensor
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the forwards function repeatedly and output a sequence of states
         and outputs
-
-        TODO: output tensors instead of ndarrays
 
         Args:
             u (torch.Tensor): Inputs to model. If the model has no inputs 
@@ -132,8 +130,8 @@ class ESN:
 
         Returns:
             Tuple containing:
-            - np.ndarray: ESN states
-            - np.ndarray: ESN outputs
+            - torch.Tensor: ESN states
+            - torch.Tensor: ESN outputs
         """
         x_esn = []
         y_esn = []
@@ -142,10 +140,10 @@ class ESN:
 
         for i in range(u.shape[0]):
             x_i, y_i = self.forwards(u[i, :], x_i, y_i)
-            x_esn.append(x_i.detach().cpu().numpy())
-            y_esn.append(y_i.detach().cpu().numpy())
+            x_esn.append(x_i)
+            y_esn.append(y_i)
 
-        return np.array(x_esn), np.array(y_esn)
+        return torch.stack(x_esn), torch.stack(y_esn)
 
     def train(
         self, 

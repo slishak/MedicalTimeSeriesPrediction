@@ -1,4 +1,4 @@
-from typing import Optional, Callable
+from typing import Optional, Type
 from time import perf_counter
 
 import torch
@@ -283,7 +283,7 @@ class AD_EnKF:
         self, 
         obs_train: torch.Tensor, 
         n_epochs: int = 50, 
-        lr_decay: int = 1, 
+        lr_decay: float = 1.0, 
         lr_hold: int = 10, 
         progress_fig: bool = True, 
         display_fig: bool = True,
@@ -309,8 +309,8 @@ class AD_EnKF:
             obs_train (torch.Tensor): Observations of process for training.
             n_epochs (int, optional): Number of training epochs. Defaults to 
                 50.
-            lr_decay (int, optional): Polynomial decay rate of learning rate. 
-                Defaults to 1.
+            lr_decay (float, optional): Polynomial decay rate of learning rate. 
+                Defaults to 1.0.
             lr_hold (int, optional): Number of epochs before beginning to decay
                 learning rate. Defaults to 10.
             progress_fig (bool, optional): In a notebook context, create a 
@@ -378,7 +378,7 @@ class AD_EnKF:
                     ll_test, _ = self.log_likelihood(obs_test, dt=dt)
                 if print_timing:
                     t2 = perf_counter()
-                    print(f'Test step: {t2-t1:.3f}s')
+                    print(f'Test step: {t2-t1:.3f}s, ll={ll_test}')
             else:
                 t2 = t1
 
@@ -395,7 +395,7 @@ class AD_EnKF:
 
             if print_timing:
                 t3 = perf_counter()
-                print(f'Test step: {t3-t2:.3f}s')
+                print(f'Train step: {t3-t2:.3f}s, ll={ll_sum}')
 
             self._scheduler.step()
 
@@ -531,7 +531,7 @@ class NeuralNet(nn.Module):
         input_dim: int, 
         output_dim: int, 
         hidden_dims: list[int], 
-        activation_function: Callable = torch.relu,
+        activation_function: Type[nn.Module] = nn.ReLU,
     ):
         """Initialise
 
@@ -543,7 +543,7 @@ class NeuralNet(nn.Module):
         super().__init__()
         self.first_layer = nn.Linear(input_dim, hidden_dims[0])
         self.last_layer = nn.Linear(hidden_dims[-1], output_dim)
-        self.activation_function = activation_function
+        self.activation_function = activation_function()
         self.hidden_layers = nn.ModuleList()
         for dim_1, dim_2 in zip(hidden_dims[:-1], hidden_dims[1:]):
             self.hidden_layers.append(nn.Linear(dim_1, dim_2))
