@@ -148,25 +148,41 @@ if __name__ == '__main__':
         fig_r.write_html('resp.html', auto_open=True)
 
     if 'p_aod' in cvs.state_names:
-        fig_metrics = make_subplots(rows=4, cols=1, specs=[[{}], [{}], [{}], [{'secondary_y': True}]], shared_xaxes='all')
-        fig_metrics.add_scatter(x=df['t'], y=df['p_ao'], line_color='black', row=1, col=1, showlegend=False)
-        fig_metrics.add_scatter(x=df['t'], y=df['p_aom'], line_color='black', line_dash='dash', row=1, col=1, showlegend=False)
-        fig_metrics.add_scatter(x=df['t'], y=df['p_aos'], line_color='red', row=1, col=1, showlegend=False)
-        fig_metrics.add_scatter(x=df['t'], y=df['p_aod'], line_color='blue', row=1, col=1, showlegend=False)
+        fig_metrics = make_subplots(
+            rows=4, 
+            cols=2, 
+            specs=[
+                [{}, {}], 
+                [{}, {}], 
+                [{}, {}], 
+                [{'secondary_y': True}, {'secondary_y': True}],
+            ],
+            shared_xaxes='columns',
+            # horizontal_spacing=0.02,
+            column_widths=[3, 1],
+        )
+        for c in [1, 2]:
+            fig_metrics.add_scatter(x=df['t'], y=df['p_ao'], line_color='black', row=1, col=c, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['p_aom'], line_color='black', line_dash='dash', row=1, col=c, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['p_aos'], line_color='red', row=1, col=c, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['p_aod'], line_color='blue', row=1, col=c, showlegend=False)
 
-        fig_metrics.add_scatter(x=df['t'], y=df['p_vc'], line_color='black', row=2, col=1, showlegend=False)
-        fig_metrics.add_scatter(x=df['t'], y=df['p_vcm'], line_color='black', line_dash='dash', row=2, col=1, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['p_pa'], line_color='black', row=2, col=c, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['p_pam'], line_color='black', line_dash='dash', row=2, col=c, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['p_pas'], line_color='red', row=2, col=c, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['p_pad'], line_color='blue', row=2, col=c, showlegend=False)
+            
+            fig_metrics.add_scatter(x=df['t'], y=df['p_vc'], line_color='black', row=3, col=c, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['p_vcm'], line_color='black', line_dash='dash', row=3, col=c, showlegend=False)
 
-        fig_metrics.add_scatter(x=df['t'], y=df['dv_ao_dt'], line_color='black', row=3, col=1, showlegend=False)
-        
-        fig_metrics.add_scatter(x=df['t'], y=df['e_t'], line_color='red', row=4, col=1, showlegend=False, secondary_y=True)
-        fig_metrics.add_scatter(x=t, y=f_hr(t), line_color='black', row=4, col=1, showlegend=False)
+            fig_metrics.add_scatter(x=df['t'], y=df['e_t'], line_color='red', row=4, col=c, showlegend=False, secondary_y=True)
+            fig_metrics.add_scatter(x=t, y=f_hr(t), line_color='black', row=4, col=c, showlegend=False)
 
-        fig_metrics.update_yaxes(title_text=r'$P_{ao}$', row=1)
-        fig_metrics.update_yaxes(title_text=r'$P_{vc}$', row=2)
-        fig_metrics.update_yaxes(title_text=r'$\frac{dV_{ao}}{dt}$', row=3)
-        fig_metrics.update_yaxes(title_text=r'HR', row=4, secondary_y=False)
-        fig_metrics.update_yaxes(title_text=r'$e(t)$', title_font_color='red', row=4, secondary_y=True)
+        fig_metrics.update_yaxes(title_text=r'$P_{ao}$', row=1, col=1)
+        fig_metrics.update_yaxes(title_text=r'$P_{pa}$', row=2, col=1)
+        fig_metrics.update_yaxes(title_text=r'$P_{vc}$', row=3, col=1)
+        fig_metrics.update_yaxes(title_text=r'HR', row=4, col=1, secondary_y=False)
+        fig_metrics.update_yaxes(title_text=r'$e(t)$', title_font_color='red', row=4, col=1, secondary_y=True)
 
         fig_metrics.update_xaxes(title_text='t', row=4)
 

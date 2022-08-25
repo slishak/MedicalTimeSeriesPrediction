@@ -5,7 +5,6 @@ from typing import ClassVar, Union, Optional, Callable, Type
 
 import torch
 from torch import nn
-from scipy.optimize import root_scalar
 from xitorch.optimize import rootfinder
 from xitorch._utils.exceptions import ConvergenceWarning
 
@@ -21,6 +20,7 @@ from biophysical_models.base_classes import (
 )
 from biophysical_models.unit_conversions import convert
 from biophysical_models import parameters
+from biophysical_models.misc import newton_raphson
 
 warnings.simplefilter('error', ConvergenceWarning)
 # pd.options.plotting.backend = 'plotly'
@@ -191,6 +191,8 @@ class SmithCardioVascularSystem(ODEBase):
         # Jallon 2009 modification
         self.p_pl_affects_pu_and_pa = nn.Parameter(torch.tensor(False), requires_grad=False)
 
+        # Newton or xitorch
+        self._v_spt_method = 'xitorch'
         # First initial guess for v_spt
         self._v_spt_old = torch.tensor(convert(0.0055, 'l'))
         self._v_spt_last = self._v_spt_old
@@ -446,26 +448,30 @@ class SmithCardioVascularSystem(ODEBase):
             torch.Tensor: v_spt solution
         """
 
-        v_spt = self._v_spt_old
-        i = 0
-        while True:
-            if i == 100:
-                print('Slow v_spt convergence')
-            i += 1
-            res, grad = self.v_spt_residual_analytical(v_spt, v_lv, v_rv, e_t, self)
-            dv = res / grad
-            v_spt = v_spt - dv
-            step_abs = dv.abs()
-            if (step_abs < rtol * v_spt.abs()).any():
-                # Rel tol
-                break
-            if (step_abs < xtol).any():
-                # Abs tol
-                break
-
-        self._v_spt_last = v_spt.detach()
+        # No explicit solution for v_spt, need to use root finder
+        if self._v_spt_method == 'xitorch':
+            v_spt = rootfinder(
+                self.v_spt_residual_analytical, 
+                self._v_spt_old, 
+                params=(v_lv, v_rv, e_t, self), 
+                method=newton_raphson, 
+                f_tol=xtol,
+                f_rtol=rtol,
+                maxiter=100,
+            )
+        elif self._v_spt_method == 'newton':
+            v_spt = newton_raphson(
+                self.v_spt_residual_analytical, 
+                self._v_spt_old, 
+                params=(v_lv, v_rv, e_t, self), 
+                f_tol=xtol,
+                f_rtol=rtol,
+                maxiter=100,
+            )
+        else:
+            raise NotImplementedError(self._v_spt_method)
             
-        # print(f'Iterations: {i}')
+        self._v_spt_last = v_spt.detach()
 
         return v_spt
 
@@ -475,7 +481,7 @@ class SmithCardioVascularSystem(ODEBase):
         v_lv: torch.Tensor,
         v_rv: torch.Tensor,
         e_t: torch.Tensor,
-        cvs: "SmithCardioVascularSystem"
+        cvs: "SmithCardioVascularSystem",
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Residual function for v_spt, with analytic derivative.
         
@@ -483,20 +489,20 @@ class SmithCardioVascularSystem(ODEBase):
 
         Implemented as static method as xitorch requires a pure function
 
-        TODO: if we don't use xitorch, can use normal method
-
         Args:
-            v_spt_in (torch.Tensor): Current scaled value of v_spt from 
+            v_spt (torch.Tensor): Current value of v_spt from 
                 root finding algorithm
             v_lv (torch.Tensor): Left ventricle volume
             v_rv (torch.Tensor): Right ventricle volume
             e_t (torch.Tensor): Cardiac driver function
             cvs (SmithCardioVascularSystem): self
+            return_grad (bool, Optional): return grad. Defaults to False
 
         Returns:
             Tuple containing:
             - res (torch.Tensor): Residual
-            - grad (torch.Tensor): Gradient of residual wrt scaled v_spt
+            - grad (torch.Tensor): Gradient of residual wrt v_spt
+                (only if return_grad)
         """
 
         # Free wall volumes v_(lvf/rvf/spt) are not physical volumes, but 
@@ -658,6 +664,7 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         }
 
         return states
+
 
 class JallonHeartLungs(ODEBase):
     """Jallon model of heart and lungs (combined cardiovascular and 
