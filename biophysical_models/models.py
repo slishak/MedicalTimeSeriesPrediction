@@ -58,11 +58,11 @@ class PassiveRespiratorySystem(ODEBase):
                 of 1/l.
         """
         super().__init__()
-        self.e_alv = nn.Parameter(torch.as_tensor(e_alv), requires_grad=False)
-        self.e_cw = nn.Parameter(torch.as_tensor(e_cw), requires_grad=False)
-        self.r_ua = nn.Parameter(torch.as_tensor(r_ua), requires_grad=False)
-        self.r_ca = nn.Parameter(torch.as_tensor(r_ca), requires_grad=False)
-        self.v_th0 = nn.Parameter(torch.as_tensor(v_th0), requires_grad=False)
+        self.e_alv = nn.Parameter(torch.as_tensor(e_alv))
+        self.e_cw = nn.Parameter(torch.as_tensor(e_cw))
+        self.r_ua = nn.Parameter(torch.as_tensor(r_ua))
+        self.r_ca = nn.Parameter(torch.as_tensor(r_ca))
+        self.v_th0 = nn.Parameter(torch.as_tensor(v_th0))
 
     def model(
         self, 
@@ -99,8 +99,11 @@ class PassiveRespiratorySystem(ODEBase):
 
         return outputs
 
-    def init_states(self) -> dict[str, torch.Tensor]:
+    def init_states(self, device='cpu') -> dict[str, torch.Tensor]:
         """Return initial values of ODE states.
+
+        Args:
+            device (str, optional): PyTorch device. Defaults to 'cpu'.
 
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
@@ -108,7 +111,7 @@ class PassiveRespiratorySystem(ODEBase):
 
         # Jallon 2009, Table 1:
         return {
-            'v_alv': torch.tensor(convert(0.5, 'l')),
+            'v_alv': torch.tensor(convert(0.5, 'l'), device=device),
         }
 
 class SmithCardioVascularSystem(ODEBase):
@@ -153,7 +156,7 @@ class SmithCardioVascularSystem(ODEBase):
 
         # Pleural pressure
         if not p_pl_is_input:
-            self.p_pl = nn.Parameter(torch.tensor(-4.0), requires_grad=False)
+            self.p_pl = nn.Parameter(torch.tensor(-4.0))
 
         # Pressure-volume relationships
         # Left ventricle free wall
@@ -183,14 +186,14 @@ class SmithCardioVascularSystem(ODEBase):
             self.state_names = self.state_names + self.e.state_names
 
         # Total blood volume
-        self.v_tot = nn.Parameter(torch.tensor(convert(5.5, 'l')), requires_grad=False)
+        self.v_tot = nn.Parameter(torch.tensor(convert(5.5, 'l')))
 
         # Jallon 2009 modification
         self.p_pl_affects_pu_and_pa = nn.Parameter(torch.tensor(False), requires_grad=False)
 
         # First initial guess for v_spt
         self._v_spt_old = torch.tensor(convert(0.0055, 'l'))
-        self._v_spt_scale = 1.0
+        self._v_spt_last = self._v_spt_old
 
     def callback_accept_step(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor):
         """Called by torchdiffeq at the end of a successful step. Used to 
@@ -204,7 +207,7 @@ class SmithCardioVascularSystem(ODEBase):
             dt (torch.Tensor): Time step (s)
         """
         super().callback_accept_step(t, x, dt)
-        self._v_spt_old = self.trajectory[-1][3]['v_spt']
+        self._v_spt_old = self._v_spt_last
 
     def model(
         self, 
@@ -374,6 +377,7 @@ class SmithCardioVascularSystem(ODEBase):
         r_lv: float = 0.025,
         r_ao: float = 0.173,
         r_rv: float = 0.024,
+        device: str = 'cpu',
     ) -> dict[str, torch.Tensor]:
         """Return initial values of ODE states by setting initial proportions 
         of the total blood volume in each of the six compartments. The volume
@@ -391,6 +395,7 @@ class SmithCardioVascularSystem(ODEBase):
                 Defaults to 0.173.
             r_rv (float, optional): Proportion of blood initially in right 
                 ventricle. Defaults to 0.024.
+            device (str, optional): PyTorch device. Defaults to 'cpu'.
 
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
@@ -410,8 +415,12 @@ class SmithCardioVascularSystem(ODEBase):
         }
 
         if self.dynamic_hr:
-            states['s'] = torch.tensor(0.)
+            states['s'] = torch.tensor(0., device=device)
 
+        # Store initial v_spt
+        init_outputs = self.pressures_volumes(torch.tensor(0., device=device), states)
+        self._v_spt_old = init_outputs['v_spt'].detach()
+        
         return states
 
     def solve_v_spt(
@@ -419,7 +428,6 @@ class SmithCardioVascularSystem(ODEBase):
         v_lv: torch.Tensor, 
         v_rv: torch.Tensor, 
         e_t: torch.Tensor,
-        method: str = 'newton',
         rtol: float = 1e-5,
         xtol: float = 1e-6,
     ) -> torch.Tensor:
@@ -431,9 +439,6 @@ class SmithCardioVascularSystem(ODEBase):
             v_lv (torch.Tensor): Left ventricle volume
             v_rv (torch.Tensor): Right ventricle volume
             e_t (torch.Tensor): Cardiac driver function
-            method (str): Root finding algorithm. Defaults to 'newton', which 
-                is implemented in-line for simplicity. Also available: 
-                'xitorch', 'scipy'.
             xtol (float): Absolute tolerance for v_spt. Defaults to 1e-5.
             rtol (float): Relative tolerance for v_spt. Defaults to 1e-6.
 
@@ -441,72 +446,32 @@ class SmithCardioVascularSystem(ODEBase):
             torch.Tensor: v_spt solution
         """
 
-        # No explicit solution for v_spt, need to use root finder
-        if method == 'xitorch':
-            f_tol = 1e-5
-            try:
-                v_spt_scaled = rootfinder(
-                    self.v_spt_residual, 
-                    torch.tensor([self._v_spt_old]), 
-                    params=(v_lv, v_rv, e_t, self), 
-                    method='broyden1', 
-                    x_tol=xtol, 
-                    f_tol=f_tol,
-                )
-            except (ValueError, ConvergenceWarning):
-                # Retry with a different method
-                # TODO: fix xitorch
-                v_spt_scaled = rootfinder(
-                    self.v_spt_residual, 
-                    torch.tensor([self._v_spt_old]), 
-                    params=(v_lv, v_rv, e_t, self), 
-                    method='linearmixing', 
-                    x_tol=xtol, 
-                    f_tol=f_tol,
-                )
-        elif method == 'newton':
-            v_spt = self._v_spt_old
-            i = 0
-            while True:
-                i += 1
-                res, grad = self.v_spt_residual_analytical(v_spt, v_lv, v_rv, e_t, self)
-                dv = res / grad
-                v_spt = v_spt - dv
-                step_abs = dv.abs()
-                if step_abs < rtol * v_spt.abs():
-                    # Rel tol
-                    break
-                if step_abs < xtol:
-                    # Abs tol
-                    break
-                
-            # print(f'Iterations: {i}')
-            v_spt_scaled = v_spt
-        elif method == 'scipy':
+        v_spt = self._v_spt_old
+        i = 0
+        while True:
+            if i == 100:
+                print('Slow v_spt convergence')
+            i += 1
+            res, grad = self.v_spt_residual_analytical(v_spt, v_lv, v_rv, e_t, self)
+            dv = res / grad
+            v_spt = v_spt - dv
+            step_abs = dv.abs()
+            if (step_abs < rtol * v_spt.abs()).any():
+                # Rel tol
+                break
+            if (step_abs < xtol).any():
+                # Abs tol
+                break
 
-            sol = root_scalar(
-                self.v_spt_residual, 
-                (v_lv, v_rv, e_t, self), 
-                x0=self._v_spt_old, 
-                method='newton', 
-                xtol=xtol,
-                rtol=rtol,
-                fprime=True,
-            )
-
-            if not sol.converged:
-                raise Exception
-
-            v_spt_scaled = sol.root
-        else:
-            raise NotImplementedError(method)
+        self._v_spt_last = v_spt.detach()
             
-        v_spt = v_spt_scaled / self._v_spt_scale
+        # print(f'Iterations: {i}')
+
         return v_spt
 
     @staticmethod
     def v_spt_residual_analytical(
-        v_spt_in: torch.Tensor,
+        v_spt: torch.Tensor,
         v_lv: torch.Tensor,
         v_rv: torch.Tensor,
         e_t: torch.Tensor,
@@ -534,8 +499,6 @@ class SmithCardioVascularSystem(ODEBase):
             - grad (torch.Tensor): Gradient of residual wrt scaled v_spt
         """
 
-        v_spt = v_spt_in/cvs._v_spt_scale
-
         # Free wall volumes v_(lvf/rvf/spt) are not physical volumes, but 
         # defined to capture deflection of cardiac free walls relative to 
         # ventricle volumes
@@ -550,90 +513,6 @@ class SmithCardioVascularSystem(ODEBase):
         grad = cvs.lvf.dp_dv(v_lvf, e_t) + cvs.rvf.dp_dv(v_rvf, e_t) + cvs.spt.dp_dv(v_spt, e_t)
 
         return res, grad
-
-    @staticmethod
-    def v_spt_residual(
-        v_spt_in: float,
-        v_lv: torch.Tensor,
-        v_rv: torch.Tensor,
-        e_t: torch.Tensor,
-        cvs: "SmithCardioVascularSystem", 
-        verbose: bool = False, 
-        deriv: bool = True,
-    ) -> Union[float, tuple[float, float]]:
-        """Residual function for v_spt, with derivative computed by PyTorch.
-
-        Returns floats rather than torch.Tensor (c.f. v_spt_residual_analytical)
-
-        # TODO: Delete this method
-
-        See Smith 2004, Eq. 20
-
-        Args:
-            v_spt_in (torch.Tensor): Current scaled value of v_spt from 
-                root finding algorithm
-            v_lv (torch.Tensor): Left ventricle volume
-            v_rv (torch.Tensor): Right ventricle volume
-            e_t (torch.Tensor): Cardiac driver function
-            cvs (SmithCardioVascularSystem): self
-            verbose (bool, optional): Print progress. Defaults to False.
-            deriv (bool, optional): Enable derivative output. Defaults to True.
-
-        Returns:
-            If deriv=False, then a single float (residual)
-            Otherwise, a tuple containing:
-            - res (float): Residual
-            - grad (float): Gradient of residual wrt scaled v_spt
-        """
-
-        # t1 = perf_counter()
-
-        v_spt_in = torch.as_tensor(v_spt_in)
-        v_spt_in.requires_grad_(deriv)
-
-        if deriv and v_spt_in.grad is not None:
-            v_spt_in.grad.zero_()
-
-        v_spt = v_spt_in/cvs._v_spt_scale
-
-        # Free wall volumes v_(lvf/rvf/spt) are not physical volumes, but 
-        # defined to capture deflection of cardiac free walls relative to 
-        # ventricle volumes
-        # Eq. 9, 10
-        v_lvf = v_lv - v_spt
-        v_rvf = v_rv + v_spt
-
-        # Eq. 16, 17
-        p_lvf = cvs.lvf.p(v_lvf, e_t)
-        p_rvf = cvs.rvf.p(v_rvf, e_t)
-        p_spt = cvs.spt.p(v_spt, e_t)
-
-        # Eq. 15
-        p_spt_rhs = p_lvf - p_rvf
-
-        # Residual between Eq. 15 and 17
-        res = p_spt - p_spt_rhs
-
-        if deriv:
-            res.backward()
-            grad = v_spt_in.grad.detach()
-            v_spt_in.requires_grad_(False)
-        
-            if verbose:
-                print(f'x={v_spt*1e3}, res={res}, grad={grad}')
-
-            out = (res.detach().item(), grad.detach().item())
-
-            # t2 = perf_counter()
-            # print(f'solve fn: {t2-t1:.2e}s')
-            
-            return out
-        else:
-            
-            if verbose:
-                print(f'x={v_spt*1e3}, res={res}')
-
-            return res.detach().item()
 
 
 class InertialSmithCVS(SmithCardioVascularSystem):
@@ -731,6 +610,7 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         r_ao: float = 0.089,
         r_rv: float = 0.061,
         p_pl: Optional[torch.Tensor] = None,
+        device: str = 'cpu',
     ) -> dict[str, torch.Tensor]:
         """Return initial values of ODE states.
 
@@ -754,6 +634,7 @@ class InertialSmithCVS(SmithCardioVascularSystem):
                 ventricle. Defaults to 0.061.
             p_pl (torch.Tensor, optional): Optional input to ODE. Defaults to 
                 None.
+            device (str, optional): PyTorch device. Defaults to 'cpu'.
 
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
@@ -768,7 +649,7 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         )
 
         # Also compute initial flow rates assuming quasi-steady state
-        init_outputs = self.pressures_volumes(torch.tensor(0.), states, p_pl)
+        init_outputs = self.pressures_volumes(torch.tensor(0., device=device), states, p_pl)
         self.flow_rates(init_outputs, static=True)
 
         states = {
@@ -863,8 +744,11 @@ class JallonHeartLungs(ODEBase):
 
         return all_outputs
 
-    def init_states(self) -> dict[str, torch.Tensor]:
+    def init_states(self, device: str = 'cpu') -> dict[str, torch.Tensor]:
         """Return initial values of ODE states.
+
+        Args:
+            device (str, optional): PyTorch device. Defaults to 'cpu'.
 
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
@@ -876,9 +760,10 @@ class JallonHeartLungs(ODEBase):
             r_lv=0.025,
             r_ao=0.164,
             r_rv=0.023,
+            device=device
         )
-        resp_states = self.resp.init_states()
-        resp_pattern_states = self.resp_pattern.init_states()
+        resp_states = self.resp.init_states(device=device)
+        resp_pattern_states = self.resp_pattern.init_states(device=device)
 
         init_states = cvs_states | resp_states | resp_pattern_states
 
@@ -889,7 +774,7 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
 
     class BloodPressureMetrics(cls):
         state_names: ClassVar[list[str]] = cls.state_names + [
-            'p_aod', 'p_aos', 'p_aom', 'p_vcm'
+            'p_aod', 'p_aos', 'p_aom', 'p_vcm', 'p_pad', 'p_pas', 'p_pam',
         ]
 
         def __init__(self, *args, **kwargs):
@@ -911,14 +796,21 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
 
             # Moving averages
             outputs['dp_aom_dt'] = (outputs['p_ao'] - states['p_aom'])/self.moving_avg_weight
+            outputs['dp_pam_dt'] = (outputs['p_pa'] - states['p_pam'])/self.moving_avg_weight
             outputs['dp_vcm_dt'] = (outputs['p_vc'] - states['p_vcm'])/self.moving_avg_weight
 
             # Systolic moving average
             dp_aos_dt = (outputs['p_ao'] - states['p_aos']) * outputs['e_t']**self.moving_avg_power_s / self.moving_avg_weight_s
+            dp_pas_dt = (outputs['p_pa'] - states['p_pas']) * outputs['e_t']**self.moving_avg_power_s / self.moving_avg_weight_s
             # Only update systolic moving average when volume is increasing
             outputs['dp_aos_dt'] = torch.where(
                 outputs['dv_ao_dt'] > 0,
                 dp_aos_dt,
+                0.0
+            )
+            outputs['dp_pas_dt'] = torch.where(
+                outputs['dv_pa_dt'] > 0,
+                dp_pas_dt,
                 0.0
             )
 
@@ -932,6 +824,7 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
 
             # Diastolic moving average
             dp_aod_dt = (outputs['p_ao'] - states['p_aod']) * e_diastole**self.moving_avg_power_d / self.moving_avg_weight_d
+            dp_pad_dt = (outputs['p_pa'] - states['p_pad']) * e_diastole**self.moving_avg_power_d / self.moving_avg_weight_d
 
             # Only update diastolic moving average when volume is decreasing
             outputs['dp_aod_dt'] = torch.where(
@@ -939,17 +832,25 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
                 dp_aod_dt,
                 0.0
             )
+            outputs['dp_pad_dt'] = torch.where(
+                outputs['dv_pa_dt'] < 0,
+                dp_pad_dt,
+                0.0
+            )
 
 
             return outputs
 
-        def init_states(self) -> dict[str, torch.Tensor]:
-            init_states = super().init_states()
-            init_outputs = super().model(torch.tensor(0.), init_states)
-            init_states['p_aom'] = torch.tensor(init_outputs['p_ao'])
-            init_states['p_aos'] = torch.tensor(init_outputs['p_ao'])
-            init_states['p_aod'] = torch.tensor(init_outputs['p_ao'])
-            init_states['p_vcm'] = torch.tensor(init_outputs['p_vc'])
+        def init_states(self, device='cpu') -> dict[str, torch.Tensor]:
+            init_states = super().init_states(device=device)
+            init_outputs = super().model(torch.tensor(0., device=device), init_states)
+            init_states['p_aom'] = init_outputs['p_ao']
+            init_states['p_aos'] = init_outputs['p_ao']
+            init_states['p_aod'] = init_outputs['p_ao']
+            init_states['p_pam'] = init_outputs['p_pa']
+            init_states['p_pas'] = init_outputs['p_pa']
+            init_states['p_pad'] = init_outputs['p_pa']
+            init_states['p_vcm'] = init_outputs['p_vc']
             
             return init_states
 

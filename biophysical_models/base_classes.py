@@ -17,7 +17,7 @@ class ODEBase(ABC, nn.Module):
     to denote state names
     """
 
-    def __init__(self, *args, verbose=True, **kwargs):
+    def __init__(self, *args, verbose=True, save_traj=True, **kwargs):
         """Initialises nn.Module
 
         Args:
@@ -25,7 +25,9 @@ class ODEBase(ABC, nn.Module):
                 accepted step. Defaults to True.
         """
         super().__init__(*args, **kwargs)
-        self.trajectory = []
+        self.save_traj = save_traj
+        if self.save_traj:
+            self.trajectory = []
         self.verbose = verbose
 
     def ode_state_dict(self, states: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -37,7 +39,7 @@ class ODEBase(ABC, nn.Module):
         Returns:
             dict[str, torch.Tensor]: ODE states formatted as dict
         """
-        return {name: states[i] for i, name in enumerate(self.state_names)}
+        return {name: states[..., i] for i, name in enumerate(self.state_names)}
 
     def ode_state_tensor(self, outputs: dict[str, torch.Tensor]) -> torch.Tensor:
         """Convert a dict of ODE states to a tensor
@@ -50,7 +52,7 @@ class ODEBase(ABC, nn.Module):
         """
         state = torch.stack([
             outputs[state] for state in self.state_names
-        ])
+        ], -1)
 
         return state
 
@@ -66,7 +68,7 @@ class ODEBase(ABC, nn.Module):
 
         deriv = torch.stack([
             outputs[f'd{state}_dt'] for state in self.state_names
-        ])
+        ], -1)
 
         return deriv
 
@@ -103,7 +105,7 @@ class ODEBase(ABC, nn.Module):
         pass
 
     @abstractmethod
-    def init_states(self) -> dict[str, torch.Tensor]:
+    def init_states(self, device: str = 'cpu') -> dict[str, torch.Tensor]:
         """To be implemented in subclass. Initial states of ODE.
         """
         pass
@@ -168,10 +170,11 @@ class ODEBase(ABC, nn.Module):
         """
         if self.verbose:
             print(f't={t:.4f}s, dt={dt:.4f}')
-        states = self.ode_state_dict(x)
-        outputs = self.model(t, states)
-        deriv = self.ode_deriv_tensor(outputs)
-        self.trajectory.append((t, x, deriv, outputs))
+        if self.save_traj:
+            states = self.ode_state_dict(x)
+            outputs = self.model(t, states)
+            deriv = self.ode_deriv_tensor(outputs)
+            self.trajectory.append((t, x, deriv, outputs))
 
 
 class PressureVolume(nn.Module):
@@ -201,12 +204,12 @@ class PressureVolume(nn.Module):
         """
         super().__init__()
         if e_es is not None:
-            self.e_es = nn.Parameter(torch.as_tensor(e_es), requires_grad=False)
-            self.v_d = nn.Parameter(torch.as_tensor(v_d), requires_grad=False)
+            self.e_es = nn.Parameter(torch.as_tensor(e_es))
+            self.v_d = nn.Parameter(torch.as_tensor(v_d))
         if v_0 is not None:
-            self.v_0 = nn.Parameter(torch.as_tensor(v_0), requires_grad=False)
-            self.lam = nn.Parameter(torch.as_tensor(lam), requires_grad=False)
-            self.p_0 = nn.Parameter(torch.as_tensor(p_0), requires_grad=False)
+            self.v_0 = nn.Parameter(torch.as_tensor(v_0))
+            self.lam = nn.Parameter(torch.as_tensor(lam))
+            self.p_0 = nn.Parameter(torch.as_tensor(p_0))
 
     def p(self, v: torch.Tensor, e_t: torch.Tensor) -> torch.Tensor:
         """Chamber pressure due to volume and time-varying cardiac driving
@@ -292,7 +295,7 @@ class BloodVessel(nn.Module):
             r (float): Resistance parameter
         """
         super().__init__()
-        self.r = nn.Parameter(torch.as_tensor(r), requires_grad=False)
+        self.r = nn.Parameter(torch.as_tensor(r))
 
     def flow_rate(self, p_upstream: torch.Tensor, p_downstream: torch.Tensor) -> torch.Tensor:
         """Volume flow rate due to pressure differential
@@ -364,7 +367,7 @@ class InertialValve(Valve):
             l (float): Inertance of flow through valve
         """
         super().__init__(r)
-        self.l = nn.Parameter(torch.as_tensor(l), requires_grad=False)
+        self.l = nn.Parameter(torch.as_tensor(l))
 
     def open(
         self, 
@@ -429,9 +432,9 @@ class CardiacDriver(nn.Module):
             hr (float, optional): Heart rate (bpm). Defaults to 80.0.
         """
         super().__init__()
-        self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
-        self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
-        self.hr = nn.Parameter(torch.as_tensor(hr), requires_grad=False)
+        self.a = nn.Parameter(torch.as_tensor(a))
+        self.b = nn.Parameter(torch.as_tensor(b))
+        self.hr = nn.Parameter(torch.as_tensor(hr))
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
         """Evaluate cardiac driver function at a given time point.
@@ -469,10 +472,10 @@ class DynamicCardiacDriver(ODEBase):
                 (bpm). Defaults to hr(t) = 80.
         """
         super().__init__()
-        self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
-        self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
+        self.a = nn.Parameter(torch.as_tensor(a))
+        self.b = nn.Parameter(torch.as_tensor(b))
         # Not used, just for parameter setting compatibility:
-        self.hr = nn.Parameter(torch.as_tensor(0.0), requires_grad=False)
+        self.hr = nn.Parameter(torch.as_tensor(0.0))
         self.f_hr = hr
 
     def model(
@@ -491,6 +494,8 @@ class DynamicCardiacDriver(ODEBase):
         """
 
         hr = self.f_hr(t)
+        if states['s'].ndim:
+            hr = hr.expand(*states['s'].shape)
         ds_dt = hr / 60
         s_wrapped = torch.remainder(states['s'], 1)
         e = self.a * torch.exp(-self.b * (s_wrapped - 0.5)**2)
@@ -502,15 +507,18 @@ class DynamicCardiacDriver(ODEBase):
             'e_t': e,
         }
 
-    def init_states(self) -> dict[str, torch.Tensor]:
+    def init_states(self, device: str = 'cpu') -> dict[str, torch.Tensor]:
         """Initial states of dynamic cardiac driver function
+
+        Args:
+            device (str, optional): PyTorch device. Defaults to 'cpu'.
 
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
         """
 
         return {
-            's': torch.tensor(0.0),
+            's': torch.tensor(0.0, device=device),
         }
 
 
@@ -555,13 +563,13 @@ class RespiratoryPatternGenerator(ODEBase):
                 Modification original in this work. Defaults to 0.1/s
         """
         super().__init__()
-        self.hb = nn.Parameter(torch.as_tensor(hb), requires_grad=False)
-        self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
-        self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
-        self.alpha = nn.Parameter(torch.as_tensor(alpha), requires_grad=False)
-        self.lam = nn.Parameter(torch.as_tensor(lam), requires_grad=False)
-        self.mu = nn.Parameter(torch.as_tensor(mu), requires_grad=False)
-        self.beta = nn.Parameter(torch.as_tensor(beta), requires_grad=False)
+        self.hb = nn.Parameter(torch.as_tensor(hb))
+        self.a = nn.Parameter(torch.as_tensor(a))
+        self.b = nn.Parameter(torch.as_tensor(b))
+        self.alpha = nn.Parameter(torch.as_tensor(alpha))
+        self.lam = nn.Parameter(torch.as_tensor(lam))
+        self.mu = nn.Parameter(torch.as_tensor(mu))
+        self.beta = nn.Parameter(torch.as_tensor(beta))
 
     def model(
         self, 
@@ -599,15 +607,18 @@ class RespiratoryPatternGenerator(ODEBase):
         f = (self.a * y**2 + self.b * y) * (x + y)
         return f
 
-    def init_states(self) -> dict[str, torch.Tensor]:
+    def init_states(self, device='cpu') -> dict[str, torch.Tensor]:
         """Initial states of Lienard system
+
+        Args:
+            device (str, optional): PyTorch device. Defaults to 'cpu'.
 
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
         """
 
         return {
-            'x': torch.tensor(-0.6),
-            'y': torch.tensor(0.0),
-            'p_mus': torch.tensor(0.0),
+            'x': torch.tensor(-0.6, device=device),
+            'y': torch.tensor(0.0, device=device),
+            'p_mus': torch.tensor(0.0, device=device),
         }
