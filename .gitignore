@@ -16,3 +16,4 @@ dask-worker-space
 
 # Data
 *.hdf5
+*.json
