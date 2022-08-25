@@ -101,6 +101,7 @@ class AD_EnKF:
         init_state_distribution: Optional[torch.distributions.Distribution] = None,
         taper_radius: Optional[float] = None,
         neural_ode: bool = False,
+        odeint_kwargs: Optional[dict] = None,
     ):
         """Learn the dynamics of a dataset using AD-EnKF, with linear state
         observations. The number of states and observations are defined by 
@@ -125,6 +126,8 @@ class AD_EnKF:
             neural_ode (bool, optional): Assume transition_function is a neural
                 ODE. Defaults to False, in which case transition_function 
                 computes the next discrete state
+            odeint_kwargs (dict, optional): kwargs to pass to odeint when 
+                transition function is a neural ODE.
         """
 
         self.transition_function = transition_function
@@ -135,6 +138,9 @@ class AD_EnKF:
         self.n_particles = n_particles
         self.taper_radius = taper_radius
         self.neural_ode = neural_ode
+        if odeint_kwargs is None:
+            odeint_kwargs = {'method': 'rk4', 'options': {'step_size': 0.01}}
+        self.odeint_kwargs = odeint_kwargs
 
         if init_state_distribution is None:
             init_state_distribution = torch.distributions.MultivariateNormal(
@@ -234,7 +240,8 @@ class AD_EnKF:
             # TODO: Wire up t and input vector
             if self.neural_ode:
                 t = i_t * dt
-                x_hat = odeint(self.transition_function, x_i, torch.tensor([t-dt, t]), method='euler', options={'step_size': dt/5})[-1]
+                t_ode = torch.tensor([t, t+dt], dtype=torch.float32, device=settings.device)
+                x_hat = odeint(self.transition_function, x_i, t_ode, **self.odeint_kwargs)[-1]
             else:
                 x_hat = self.transition_function(None, x_i)
             x_hat = self.process_noise(x_hat)
@@ -259,7 +266,7 @@ class AD_EnKF:
                 k_hat, 
                 self.observation_noise(obs[i_t, :].repeat(self.n_particles, 1)).T - h_xhat,
             ).T
-            
+
             # Likelihood
             h_mhat = self.observation_matrix @ m_hat
             likelihood_dist = torch.distributions.MultivariateNormal(
@@ -344,20 +351,19 @@ class AD_EnKF:
         if progress_fig:
             if self._fig is None:
                 self._fig = go.FigureWidget(
-                    subplots.make_subplots(rows=4, cols=1, shared_xaxes=True))
+                    subplots.make_subplots(rows=3, cols=1, shared_xaxes=True))
                 self._fig.update_layout(
                     title_text=f'Training: n={n_epochs}, lr_decay={lr_decay}, lr_hold={lr_hold}'
                 )
                 self._fig.update_yaxes(row=1, title_text='LL')
-                self._fig.update_yaxes(row=2, title_text='LR alpha', type='log')
-                self._fig.update_yaxes(row=3, title_text='LR beta', type='log')
-                self._fig.update_yaxes(row=4, title_text='Process noise')
-                self._fig.update_xaxes(row=4, title_text='Epochs')
+                self._fig.update_yaxes(row=2, title_text='LR', type='log')
+                self._fig.update_yaxes(row=3, title_text='Process noise')
+                self._fig.update_xaxes(row=3, title_text='Epochs')
                 self._fig.add_scatter(row=1, col=1, x=[], y=[], showlegend=False)
                 self._fig.add_scatter(row=1, col=1, x=[], y=[], showlegend=False, line_dash='dot')
+                self._fig.add_scatter(row=2, col=1, x=[], y=[], showlegend=False, line_dash='dash')
                 self._fig.add_scatter(row=2, col=1, x=[], y=[], showlegend=False)
                 self._fig.add_scatter(row=3, col=1, x=[], y=[], showlegend=False)
-                self._fig.add_scatter(row=4, col=1, x=[], y=[], showlegend=False)
                 self._lines = self._fig.data
             if display_fig:
                 display(self._fig)
