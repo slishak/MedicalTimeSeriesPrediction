@@ -52,10 +52,10 @@ class Sweep:
 
     @staticmethod
     def set_resolution(source):
-        if source == 'lorenz':
-            return 50
-        else:
+        if source in ('vdp', 'rossler'):
             return 10
+        else:
+            return 50
 
     def generate_data(self, source=None):
         if source is None:
