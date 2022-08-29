@@ -38,11 +38,15 @@ def newton_raphson(
     best_dxnorm = torch.inf
     best_iter = None
 
+    # Add return_grad argument to end of params
+    extended_params = list(params)
+    extended_params.append(True)
+
     with torch.no_grad():
         i = 0
         while True:
             i += 1
-            y, dy_dx = fcn(x, *params)
+            y, dy_dx = fcn(x, *extended_params)
             dx = y / dy_dx
             x = x - dx
             step_abs = dx.abs()
