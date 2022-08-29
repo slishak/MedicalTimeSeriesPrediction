@@ -200,8 +200,9 @@ def generate_data(
             'inertial_cvs': InertialSmithCVS,
             'jallon': JallonHeartLungs,
         }
-        model = models[source]()
-        t_out, y_full = model.simulate(t_range[1], resolution)
+        with torch.no_grad():
+            model = models[source]()
+            t_out, y_full = model.simulate(t_range[1], resolution)
 
     y_full = y_full + torch.randn_like(y_full) * noise
     u_full = torch.zeros(
