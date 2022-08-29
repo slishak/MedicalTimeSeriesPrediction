@@ -471,11 +471,9 @@ class AD_EnKF:
         include_process_noise: bool = False, 
         include_observation_noise: bool = False,
         dt: bool = False
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Predict the state and output of a sequence a number of steps into
         the future, given an initial state.
-
-        TODO: output tensors instead of ndarrays
 
         Args:
             x_i (torch.Tensor): Initial state
@@ -489,8 +487,8 @@ class AD_EnKF:
 
         Returns:
             Tuple containing:
-            - np.ndarray: AD-EnKF states
-            - np.ndarray: AD-EnKF outputs
+            - torch.Tensor: AD-EnKF states
+            - torch.Tensor: AD-EnKF outputs
         """
 
         if self.neural_ode:
@@ -499,10 +497,8 @@ class AD_EnKF:
 
             if not include_observation_noise:
                 t = torch.arange(0, (n+1)*dt, dt, device=settings.device)
-                x = odeint(self.transition_function, x_0, t)
-                y = torch.mm(self.observation_matrix, x.T).T
-                x_kf = x.detach().cpu().numpy()
-                y_kf = y.detach().cpu.numpy()
+                x_kf = odeint(self.transition_function, x_0, t)
+                y_kf = torch.mm(self.observation_matrix, x_kf.T).T
             else:
                 raise NotImplementedError('todo')
         else:
@@ -512,16 +508,15 @@ class AD_EnKF:
             x_i = x_0
 
             for i in range(n):
+                x_i = self.forward(x_i, include_process_noise, dt)
                 y_i = torch.mm(self.observation_matrix, x_i.T).T
                 if include_observation_noise:
                     y_i = self.observation_noise(y_i)
 
-                x_kf.append(x_i.detach().cpu().numpy())
-                y_kf.append(y_i.detach().cpu().numpy())
+                x_kf.append(x_i)
+                y_kf.append(y_i)
                 
-                x_i = self.forward(x_i, include_process_noise, dt)
-
-        return np.array(x_kf), np.array(y_kf)
+        return torch.stack(x_kf), torch.stack(y_kf)
 
 
 class NeuralNet(nn.Module):
