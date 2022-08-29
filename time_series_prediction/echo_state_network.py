@@ -80,7 +80,7 @@ class ESN:
             signs = sign_dist.sample([self.n_neurons, self.n_neurons]).to(settings.device) * 2 - 1
             self.w = self.w * signs
 
-    def forwards(
+    def forward(
         self, 
         inp: torch.Tensor, 
         prev_state: torch.Tensor, 
@@ -139,7 +139,7 @@ class ESN:
         y_i = y_0
 
         for i in range(u.shape[0]):
-            x_i, y_i = self.forwards(u[i, :], x_i, y_i)
+            x_i, y_i = self.forward(u[i, :], x_i, y_i)
             x_esn.append(x_i)
             y_esn.append(y_i)
 
