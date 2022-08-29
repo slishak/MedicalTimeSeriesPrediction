@@ -126,6 +126,7 @@ class SmithCardioVascularSystem(ODEBase):
         *args, 
         p_pl_is_input: bool = False, 
         f_hr: Optional[Callable] = None, 
+        volume_ratios: bool = False,
         **kwargs,
     ):
         """Initialise. All parameters passed to nn.Module. 
@@ -138,11 +139,15 @@ class SmithCardioVascularSystem(ODEBase):
             f_hr (Callable, optional): Heart rate as a function of time. 
                 Defaults to None, in which case a constant heart rate model is
                 used.
+            volume_ratios (bool, optional): Use blood volume proportions as ODE
+                states. Otherwise, use raw volumes. Allows v_tot parameter 
+                sensitivities to be found correctly. Defaults to False.
         """
 
         super().__init__(*args, **kwargs)
 
         self._p_pl_is_input = p_pl_is_input
+        self.volume_ratios = volume_ratios
 
         # Valves
         self.mt = Valve(convert(0.06, 'kPa s/l'))  # Mitral valve
@@ -269,14 +274,19 @@ class SmithCardioVascularSystem(ODEBase):
                 flow rates
         """
 
+        if self.volume_ratios:
+            deriv_scale = self.v_tot
+        else:
+            deriv_scale = 1
+
         # Chamber volume changes
         # Explicitly defined in Smith 2007, Fig. 1, C17-C22
-        outputs['dv_pa_dt'] = outputs['q_pv'] - outputs['q_pul']
-        outputs['dv_pu_dt'] = outputs['q_pul'] - outputs['q_mt']
-        outputs['dv_lv_dt'] = outputs['q_mt'] - outputs['q_av']
-        outputs['dv_ao_dt'] = outputs['q_av'] - outputs['q_sys']
-        outputs['dv_vc_dt'] = outputs['q_sys'] - outputs['q_tc']
-        outputs['dv_rv_dt'] = outputs['q_tc'] - outputs['q_pv']
+        outputs['dv_pa_dt'] = (outputs['q_pv'] - outputs['q_pul']) / deriv_scale
+        outputs['dv_pu_dt'] = (outputs['q_pul'] - outputs['q_mt']) / deriv_scale
+        outputs['dv_lv_dt'] = (outputs['q_mt'] - outputs['q_av']) / deriv_scale
+        outputs['dv_ao_dt'] = (outputs['q_av'] - outputs['q_sys']) / deriv_scale
+        outputs['dv_vc_dt'] = (outputs['q_sys'] - outputs['q_tc']) / deriv_scale
+        outputs['dv_rv_dt'] = (outputs['q_tc'] - outputs['q_pv']) / deriv_scale
 
     def pressures_volumes(
         self, 
@@ -300,6 +310,12 @@ class SmithCardioVascularSystem(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Pressure/volume outputs
         """
+
+        if self.volume_ratios:
+            states = {
+                key: val * self.v_tot if key in self.state_names[:6] else val
+                for key, val in states.items()
+            }
 
         if self._p_pl_is_input:
             assert p_pl is not None, "p_pl not passed to CVS model"
@@ -408,13 +424,16 @@ class SmithCardioVascularSystem(ODEBase):
         assert r_vc > 0, "Initial v_vc must not be negative"
 
         states = {
-            'v_pa': r_pa * self.v_tot,
-            'v_pu': r_pu * self.v_tot,
-            'v_lv': r_lv * self.v_tot,
-            'v_ao': r_ao * self.v_tot,
-            'v_vc': r_vc * self.v_tot,
-            'v_rv': r_rv * self.v_tot,
+            'v_pa': torch.tensor(r_pa, device=device),
+            'v_pu': torch.tensor(r_pu, device=device),
+            'v_lv': torch.tensor(r_lv, device=device),
+            'v_ao': torch.tensor(r_ao, device=device),
+            'v_vc': torch.tensor(r_vc, device=device),
+            'v_rv': torch.tensor(r_rv, device=device),
         }
+        if not self.volume_ratios:
+            for key in states:
+                states[key] *= self.v_tot
 
         if self.dynamic_hr:
             states['s'] = torch.tensor(0., device=device)
@@ -482,6 +501,7 @@ class SmithCardioVascularSystem(ODEBase):
         v_rv: torch.Tensor,
         e_t: torch.Tensor,
         cvs: "SmithCardioVascularSystem",
+        return_grad: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Residual function for v_spt, with analytic derivative.
         
@@ -514,6 +534,9 @@ class SmithCardioVascularSystem(ODEBase):
 
         # Eq. 15, 16, 17
         res = cvs.spt.p(v_spt, e_t) - cvs.lvf.p(v_lvf, e_t) + cvs.rvf.p(v_rvf, e_t)
+
+        if not return_grad:
+            return res
 
         # Analytical gradient of residual wrt v_spt
         grad = cvs.lvf.dp_dv(v_lvf, e_t) + cvs.rvf.dp_dv(v_rvf, e_t) + cvs.spt.dp_dv(v_spt, e_t)
