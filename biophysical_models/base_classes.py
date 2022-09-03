@@ -171,10 +171,15 @@ class ODEBase(ABC, nn.Module):
         if self.verbose:
             print(f't={t:.4f}s, dt={dt:.4f}')
         if self.save_traj:
-            states = self.ode_state_dict(x)
-            outputs = self.model(t, states)
-            deriv = self.ode_deriv_tensor(outputs)
-            self.trajectory.append((t, x, deriv, outputs))
+            with torch.no_grad():
+                states = self._detach_dict(self.ode_state_dict(x))
+                outputs = self.model(t.detach(), states)
+                deriv = self.ode_deriv_tensor(outputs)
+                self.trajectory.append((t.detach(), x.detach(), deriv, outputs))
+
+    @staticmethod
+    def _detach_dict(d):
+        return {key: val.detach() for key, val in d.items()}
 
 
 class PressureVolume(nn.Module):
@@ -535,7 +540,7 @@ class RespiratoryPatternGenerator(ODEBase):
         a: float = -0.8, 
         b: float = -3, 
         alpha: float = 1,
-        lam: float = convert(1.0, 'mmHg'),
+        lam: float = convert(1.5, 'mmHg'),
         mu: float = convert(1.0, 'mmHg'),  # 1.08504
         beta: float = 0.1,
     ):
