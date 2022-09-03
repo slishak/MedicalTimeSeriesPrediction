@@ -5,6 +5,7 @@ from typing import ClassVar, Union, Optional, Callable, Type
 
 import torch
 from torch import nn
+from torchdiffeq import RejectStepError
 from xitorch.optimize import rootfinder
 from xitorch._utils.exceptions import ConvergenceWarning
 
@@ -22,7 +23,6 @@ from biophysical_models.unit_conversions import convert
 from biophysical_models import parameters
 from biophysical_models.misc import newton_raphson
 
-warnings.simplefilter('error', ConvergenceWarning)
 # pd.options.plotting.backend = 'plotly'
 
 
@@ -149,6 +149,10 @@ class SmithCardioVascularSystem(ODEBase):
         self._p_pl_is_input = p_pl_is_input
         self.volume_ratios = volume_ratios
 
+        if self.volume_ratios:
+            # Calculate v_vc from other states
+            self.state_names = [state for state in self.state_names if state != 'v_vc']
+
         # Valves
         self.mt = Valve(convert(0.06, 'kPa s/l'))  # Mitral valve
         self.tc = Valve(convert(0.18, 'kPa s/l'))  # Tricuspid valve
@@ -199,8 +203,11 @@ class SmithCardioVascularSystem(ODEBase):
         # Newton or xitorch
         self._v_spt_method = 'xitorch'
         # First initial guess for v_spt
-        self._v_spt_old = torch.tensor(convert(0.0055, 'l'))
+        self._v_spt_old = self._default_v_spt()
         self._v_spt_last = self._v_spt_old
+
+    def _default_v_spt(self):
+        return torch.tensor(convert(0.0055, 'l'))
 
     def callback_accept_step(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor):
         """Called by torchdiffeq at the end of a successful step. Used to 
@@ -313,9 +320,12 @@ class SmithCardioVascularSystem(ODEBase):
 
         if self.volume_ratios:
             states = {
-                key: val * self.v_tot if key in self.state_names[:6] else val
+                key: val * self.v_tot if key in self.state_names[:5] else val
                 for key, val in states.items()
             }
+            states['v_vc'] = self.v_tot - torch.stack([
+                states[state] for state in self.state_names[:5]
+            ]).sum(axis=0)
 
         if self._p_pl_is_input:
             assert p_pl is not None, "p_pl not passed to CVS model"
@@ -332,7 +342,16 @@ class SmithCardioVascularSystem(ODEBase):
             
         # Ventricular pressure-volume relationship
         # t1 = perf_counter()
-        v_spt = self.solve_v_spt(states['v_lv'], states['v_rv'], e_t)
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', ConvergenceWarning)
+            try:
+                v_spt = self.solve_v_spt(states['v_lv'], states['v_rv'], e_t)
+            except ConvergenceWarning as ex:
+                # print(f"v_spt didn't converge with previous initial guess, resetting")
+                # self._v_spt_old = self._default_v_spt()
+                # v_spt = self.solve_v_spt(states['v_lv'], states['v_rv'], e_t)
+                print('Rejecting step')
+                raise RejectStepError(ex)
         # t2 = perf_counter()
         # print(f'solve: {t2-t1:.2e}s')
 
@@ -728,9 +747,9 @@ class JallonHeartLungs(ODEBase):
         # Jallon CVS model modifications
         with torch.no_grad():
             # Table 2 of Jallon 2009
-            # self.cvs.spt.e_es.copy_(torch.tensor(convert(3750, 'mmHg s/l')))  # Wrong units in paper
+            # self.cvs.spt.e_es.copy_(torch.tensor(convert(3750, 'mmHg/l')))  # Wrong units in paper
             # self.cvs.spt.lam.copy_(torch.tensor(convert(35, '1/l')))
-            # self.cvs.vc.e_es.copy_(torch.tensor(convert(2, 'mmHg s/l')))
+            # self.cvs.vc.e_es.copy_(torch.tensor(convert(2, 'mmHg/l')))
             # # HR = 54bpm
             # self.cvs.e.hr.copy_(torch.tensor(54.0))
             # Eq 2.9, 2.10
@@ -814,8 +833,9 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
             self.moving_avg_weight_s = nn.Parameter(torch.tensor(0.01), requires_grad=False)
             self.moving_avg_weight_d = nn.Parameter(torch.tensor(0.05), requires_grad=False)
             self.moving_avg_power_s = nn.Parameter(torch.tensor(6), requires_grad=False)
-            self.moving_avg_power_d = nn.Parameter(torch.tensor(2), requires_grad=False)
-            self.r_d = nn.Parameter(torch.tensor(0.05), requires_grad=False)
+            # self.moving_avg_power_d = nn.Parameter(torch.tensor(2), requires_grad=False)
+            self.s_d = nn.Parameter(torch.tensor(0.3), requires_grad=False)
+            self.b_d = nn.Parameter(torch.tensor(200), requires_grad=False)
 
         def model(
             self, 
@@ -845,16 +865,11 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
             )
 
             # Find end of diastole (just as e(t) starts to increase)
-            if cls is JallonHeartLungs:
-                b = self.cvs.e.b
-            else:
-                b = self.e.b
-            s_d = 0.5 - torch.sqrt(-torch.log(self.r_d) / b)
-            e_diastole = torch.exp(-b * (outputs['s_wrapped'] - s_d)**2)
+            e_diastole = torch.exp(-self.b_d * (outputs['s_wrapped'] - self.s_d)**2)
 
             # Diastolic moving average
-            dp_aod_dt = (outputs['p_ao'] - states['p_aod']) * e_diastole**self.moving_avg_power_d / self.moving_avg_weight_d
-            dp_pad_dt = (outputs['p_pa'] - states['p_pad']) * e_diastole**self.moving_avg_power_d / self.moving_avg_weight_d
+            dp_aod_dt = (outputs['p_ao'] - states['p_aod']) * e_diastole / self.moving_avg_weight_d
+            dp_pad_dt = (outputs['p_pa'] - states['p_pad']) * e_diastole / self.moving_avg_weight_d
 
             # Only update diastolic moving average when volume is decreasing
             outputs['dp_aod_dt'] = torch.where(
@@ -867,7 +882,6 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
                 dp_pad_dt,
                 0.0
             )
-
 
             return outputs
 
