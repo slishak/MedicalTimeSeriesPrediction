@@ -89,6 +89,34 @@ class ScalarNoise(NoiseModel):
         return torch.log(torch.exp(t) - 1.0)
 
 
+class ScaledDiagonalNoise(ScalarNoise):
+    def __init__(self, param: torch.Tensor, scales: torch.Tensor):
+        dim = len(scales)
+        super().__init__(param, dim)
+        self.scales = scales
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply noise to a tensor
+
+        Args:
+            x (torch.Tensor): Tensor (one axis should have length self.dim)
+
+        Returns:
+            torch.Tensor: x with added noise
+        """
+        param_untrans = self._softplus(self.param)
+        x_out = x + torch.randn_like(x) * param_untrans * self.scales
+        return x_out
+    
+    def cov_mat(self) -> torch.Tensor:
+        """Covariance matrix of multivariate Gaussian.
+
+        Returns:
+            torch.Tensor: Covariance matrix of shape [self.dim, self.dim]
+        """
+        return torch.diag(self.scales) * self._softplus(self.param)
+
+
 class AD_EnKF:
     """Auto-Differentiable Ensemble Kalman Filter (AD-EnKF)"""
     def __init__(
@@ -198,6 +226,7 @@ class AD_EnKF:
         obs: torch.Tensor, 
         x_0: Optional[torch.Tensor] = None, 
         dt: Optional[float] = None,
+        t_0: float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute log likelihood of the current model generating the observations
 
@@ -207,8 +236,9 @@ class AD_EnKF:
             x_0 (torch.Tensor, optional): Initial state. Defaults to None,
                 in which case drawn from self.init_state_distribution.
             dt (float, optional): Timestep between observations (obs_train, 
-                obs_test). Required if training a neural ODE. Defaults to 
-                None.
+                obs_test). Required if training an ODE. Defaults to None.
+            t_0 (float, optional): Time of initial observation. Required if
+                training an ODE. Defaults to 0.0.
 
         Returns:
             Tuple containing
@@ -239,7 +269,7 @@ class AD_EnKF:
             # Forecast step
             # TODO: Wire up t and input vector
             if self.neural_ode:
-                t = i_t * dt
+                t = i_t * dt + t_0
                 t_ode = torch.tensor([t, t+dt], dtype=torch.float32, device=settings.device)
                 x_hat = odeint(self.transition_function, x_i, t_ode, **self.odeint_kwargs)[-1]
             else:
@@ -292,7 +322,8 @@ class AD_EnKF:
         subseq_len: Optional[int] = None,
         obs_test: Optional[torch.Tensor] = None,
         print_timing: bool = False,
-        dt: Optional[float] = False,
+        dt: Optional[float] = None,
+        save_checkpoints: Optional[str] = None,
     ):
         """Train the transition function and the process noise models using
         AD-EnKF.
@@ -330,6 +361,9 @@ class AD_EnKF:
             dt (float, optional): Timestep between observations (obs_train, 
                 obs_test). Required if training a neural ODE. Defaults to 
                 None.
+            save_checkpoints (str, optional): Save model state after each 
+                epoch in self.checkpoints. 'epoch' to save after each epoch,
+                'step' after each optimiser step. Defaults to None.
         """
 
         if self._opt is None:
@@ -344,6 +378,8 @@ class AD_EnKF:
             self._scheduler = torch.optim.lr_scheduler.LambdaLR(
                 self._opt, lr_lambda=[lambda1, lambda2])
             self._epoch = 0
+            if save_checkpoints:
+                self.checkpoints = []
 
         if subseq_len is None:
             subseq_len = obs_train.shape[0]
@@ -372,6 +408,9 @@ class AD_EnKF:
 
             t1 = perf_counter()
 
+            if self.neural_ode:
+                self.transition_function.trajectory = []
+
             # Testing
             if obs_test is not None:
                 with torch.no_grad():
@@ -380,18 +419,47 @@ class AD_EnKF:
                     t2 = perf_counter()
                     print(f'Test step: {t2-t1:.3f}s, ll={ll_test}')
             else:
+                ll_test = None
                 t2 = t1
+
+            if self.neural_ode:
+                self.transition_function.trajectory = []
 
             # Training
             x_0 = None
             ll_sum = 0
             for j in range(0, obs_train.shape[0], subseq_len):
+                ta = perf_counter()
                 self._opt.zero_grad()
-                ll, x = self.log_likelihood(obs_train[j:j+subseq_len, :], x_0, dt=dt)
+                t_0 = j*dt
+                print(f't={t_0:.2f}s')
+                ll, x = self.log_likelihood(obs_train[j:j+subseq_len, :], x_0, dt=dt, t_0=t_0)
+                tb = perf_counter()
+                print(f'Log likelihood: {tb-ta:.3f}s, ll={ll}')
                 (-ll).backward()
+                tc = perf_counter()
+                print(f'Backward pass: {tc-tb:.3f}s')
                 ll_sum = ll_sum + ll.detach()
                 x_0 = x[-1, :, :].detach()
                 self._opt.step()
+
+                if save_checkpoints == 'step':
+                    self.checkpoints.append({
+                        'll': ll_sum,
+                        'epoch': self._epoch,
+                        'model_state_dict': self.transition_function.state_dict(),
+                        'noise_state_dict': self.process_noise.state_dict(),
+                        'opt_state_dict': self._opt.state_dict(),
+                    })
+
+            if save_checkpoints == 'epoch':
+                self.checkpoints.append({
+                    'll': ll_sum,
+                    'epoch': self._epoch,
+                    'model_state_dict': self.transition_function.state_dict(),
+                    'noise_state_dict': self.process_noise.state_dict(),
+                    'opt_state_dict': self._opt.state_dict(),
+                })
 
             if print_timing:
                 t3 = perf_counter()
@@ -411,7 +479,8 @@ class AD_EnKF:
 
                 i_list.append(self._epoch)
                 ll_list.append(ll_sum.cpu().numpy())
-                ll_test_list.append(ll_test.cpu().numpy() * obs_train.shape[0] / obs_test.shape[0])
+                if ll_test is not None:
+                    ll_test_list.append(ll_test.cpu().numpy() * obs_train.shape[0] / obs_test.shape[0])
                 lambda_alpha_list.append(self._scheduler.get_last_lr()[0])
                 lambda_beta_list.append(self._scheduler.get_last_lr()[1])
                 beta_list.append(self.process_noise.param.detach().cpu().numpy()[0])
