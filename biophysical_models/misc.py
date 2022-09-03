@@ -59,7 +59,7 @@ def newton_raphson(
                 break
 
             ynorm = y.abs().max()
-            if ynorm < best_ynorm:
+            if ynorm < best_ynorm or best_x is None:
                 best_x = x
                 best_ynorm = ynorm
                 best_dxnorm = step_abs.max()
