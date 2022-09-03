@@ -5,7 +5,10 @@ Modelling and prediction of medical time series from biophysical models and ICU 
 
 Requires packages in [requirements.txt](requirements.txt) and Python 3.9. 
 
-Currently requires master branch of torchdiffeq
-`pip install git+https://github.com/rtqichen/torchdiffeq`
+Currently requires custom branch of torchdiffeq
+`pip install git+https://github.com/slishak/torchdiffeq@manually-reject-step`
+
+Install [torch.interp1d](https://github.com/aliutkus/torchinterp1d) in the same way (only required for fitting biomechanical models with AD-EnKF):
+`pip install git+https://github.com/aliutkus/torchinterp1d`
 
 Work in progress.

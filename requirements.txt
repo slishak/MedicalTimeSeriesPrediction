@@ -6,3 +6,4 @@ scipy
 pandas
 plotly
 ipython
+torchinterp1d
