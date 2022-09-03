@@ -14,6 +14,13 @@ from dask.distributed import Client, progress
 from time_series_prediction import kalman, echo_state_network, settings, ode_problems
 
 
+# TODO: Update these
+T_LYAPUNOV = {
+    'lorenz': 1.104,
+    'rossler': 14.0,
+}
+
+
 def param_sweep(params: list[tuple[str, list]]):
     keys, vals = zip(*params)
     d = [{k: v for k, v in zip(keys, val)} for val in product(*vals)]
@@ -51,7 +58,7 @@ class Sweep:
             self.n_outputs = None
 
     @staticmethod
-    def set_resolution(source):
+    def get_resolution(source):
         if source in ('vdp', 'rossler'):
             return 10
         else:
@@ -63,7 +70,7 @@ class Sweep:
         y, _, _ = ode_problems.generate_data(
             source, 
             self.n_warmup+self.n_train+self.n_test, 
-            self.set_resolution(source),
+            self.get_resolution(source),
             init_noise=self.init_noise,
         )
         y = y.to(settings.device)
@@ -96,16 +103,19 @@ class Sweep:
 
         return y_train, y_test, y_mean, y_std
 
-    def calc_err(self, y_pred, y_test=None):
+    def calc_err(self, y_pred, y_test=None, source=None):
         if y_test is None:
             y_test = self.y_test
+        if source is None:
+            source = self.source
+
         sq_err = (y_pred - y_test)**2
         
         # Prevent NaN error
         sq_err[torch.isnan(sq_err) | (torch.abs(sq_err) > 1e10)] = 1e10
 
         # Sum over all output dimensions
-        sq_err = torch.sqrt(sq_err.sum(axis=1))
+        sq_err = sq_err.sum(axis=-1)
 
         # Absolute error
         abs_err = torch.sqrt(sq_err)
@@ -114,7 +124,24 @@ class Sweep:
         mse = torch.mean(sq_err[:self.n_test_err])
         mae = torch.mean(abs_err[:self.n_test_err])
 
-        return mse, mae, sq_err, abs_err
+        # Error over first 10 Lyapunov times
+        n_lyap = 10
+        res = self.get_resolution(source)
+        try:
+            t_lyap = T_LYAPUNOV[source]
+        except KeyError:
+            mse_lyap = None
+            mae_lyap = None
+        else:
+            mse_lyap = torch.zeros(n_lyap)
+            mae_lyap = torch.zeros(n_lyap)
+            for i in range(n_lyap):
+                lyap_window = [int(i*res*t_lyap), int((i+1)*res*t_lyap)]
+
+                mse_lyap[i] = torch.mean(sq_err[lyap_window[0]:lyap_window[1]])
+                mae_lyap[i] = torch.mean(abs_err[lyap_window[0]:lyap_window[1]])
+
+        return mse, mae, sq_err, abs_err, mse_lyap, mae_lyap
 
 
 class SweepESN(Sweep):
@@ -122,39 +149,36 @@ class SweepESN(Sweep):
         self,
         param_dicts: list[dict],
         esn_kwargs: dict = {}, 
-        train_kwargs: dict = {},
         n_ensemble: int = 10,
-        train_sweep: bool = True,
         **kwargs
     ):
         super().__init__(**kwargs)
         self.param_dicts = param_dicts
         self.esn_kwargs = esn_kwargs
-        self.train_kwargs = train_kwargs
         self.n_ensemble = n_ensemble
-        self.train_sweep = train_sweep
 
         self.plot_folder = mkdtemp(prefix='esn-ensemble-')
 
     def submit_jobs(self, client: Client, show_progress=True):
         self.jobs = []
-        esn_kwargs = self.esn_kwargs
-        train_kwargs = self.train_kwargs
         for d in self.param_dicts:
-            if self.train_sweep:
-                train_kwargs = train_kwargs | d
-            else:
-                esn_kwargs = esn_kwargs | d
-            self.jobs.append(client.submit(self.run_ensemble, esn_kwargs, train_kwargs))
+            esn_kwargs = self.esn_kwargs | d
+            self.jobs.append(client.submit(self.run_ensemble, esn_kwargs))
 
         if show_progress:
-            progress(self.jobs)
+            return progress(self.jobs)
 
     def get_results(self):
         rows = []
         for task, d in zip(self.jobs, self.param_dicts):
-            mae, mse, fig_path = task.result()
-            row = {'MAE': mae, 'MSE': mse, '_fig_path': fig_path}
+            mae, mse, mae_lyap, mse_lyap, fig_path = task.result()
+            row = {
+                'MAE': mae, 
+                'MSE': mse, 
+                'MAE Lyapunov': mae_lyap,
+                'MSE Lyapunov': mse_lyap,
+                '_fig_path': fig_path,
+            }
             row.update(d)
             row['Min MAE'] = torch.min(mae)
             row['Max MAE'] = torch.max(mae)
@@ -166,13 +190,22 @@ class SweepESN(Sweep):
             row['Mean MSE'] = torch.mean(mse)
 
             rows.append(row)
+
+        return rows
             
-    def train_esn(self, esn_kwargs, train_kwargs):
+    def train_esn(
+        self, 
+        source: str = None, 
+        n_discard: int = 100, 
+        k_l2: float = 0, 
+        **esn_kwargs,
+    ):
         t1 = perf_counter()
 
         if self.y_train is None:
-            y_full = self.generate_data(self.source or esn_kwargs['source'])
+            y_full = self.generate_data(self.source or source)
             y_train, y_test, y_mean, y_std = self.split_train_test(y_full)
+            n_outputs = y_test.shape[1]
         else:
             y_train = self.y_train
             y_test = self.y_test
@@ -186,13 +219,14 @@ class SweepESN(Sweep):
             **esn_kwargs
         )
 
-        u_train = torch.empty((0, self.n_train), device=settings.device)
-        u_test = torch.empty((0, self.n_test), device=settings.device)
+        u_train = torch.empty((self.n_train, 0), device=settings.device)
+        u_test = torch.empty((self.n_test, 0), device=settings.device)
 
         x_train = esn.train(
             u_train, 
             y_train,
-            **train_kwargs
+            n_discard,
+            k_l2,
         )
         x_init = x_train[-1, :]
         y_init = y_train[-1, :]
@@ -202,7 +236,8 @@ class SweepESN(Sweep):
             y_init,
         )
 
-        mse, mae, sq_err, abs_err = self.calc_err(y_test_esn, y_test)
+        mse, mae, sq_err, abs_err, mse_lyap, mae_lyap = self.calc_err(
+            y_test_esn, y_test, source=self.source or source)
 
         y_esn_unscaled = (y_test_esn * y_std) + y_mean
         y_test_unscaled = (y_test * y_std) + y_mean
@@ -210,21 +245,23 @@ class SweepESN(Sweep):
         t2 = perf_counter()
         print(f't={t2-t1:.3f}s')
 
-        return mse, mae, sq_err, abs_err, y_esn_unscaled, y_test_unscaled
+        return mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled
         
-    def run_ensemble(self, esn_kwargs, train_kwargs):
+    def run_ensemble(self, esn_kwargs):
         y_esn_list = []
         y_test_list = []
         abs_err_list = []
         sq_err_list = []
         mae_list = []
         mse_list = []
+        mse_lyap_list = []
+        mae_lyap_list = []
 
         for i in range(self.n_ensemble):
             print(f'{i+1}/{self.n_ensemble}')
 
-            mse, mae, sq_err, abs_err, y_esn_unscaled, y_test_unscaled = self.train_esn(
-                esn_kwargs, train_kwargs,
+            mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled = self.train_esn(
+                **esn_kwargs
             )
 
             y_esn_list.append(y_esn_unscaled)
@@ -233,36 +270,67 @@ class SweepESN(Sweep):
             sq_err_list.append(sq_err)
             mae_list.append(mae)
             mse_list.append(mse)
+            mae_lyap_list.append(mae_lyap)
+            mse_lyap_list.append(mse_lyap)
 
         mae = torch.stack(mae_list)
         mse = torch.stack(mse_list)
+        if mae_lyap_list[0] is not None:
+            mae_lyap = torch.stack(mae_lyap_list)
+            mse_lyap = torch.stack(mse_lyap_list)
+        else:
+            mae_lyap = None
+            mse_lyap = None
         
         print(f'MAE {torch.mean(mae)} ± {torch.std(mae)}')
         print(f'MSE {torch.mean(mse)} ± {torch.std(mse)}')
 
-        fig = self.plot_ensemble(y_esn_list, y_test_list, abs_err_list, sq_err_list)
+        fig = self.plot_ensemble(y_esn_list, y_test_list, abs_err_list, sq_err_list, self.source or esn_kwargs.get('source'))
 
         fd, fig_path = mkstemp('.json', 'esn-', self.plot_folder)
         fig.write_json(fig_path)
         os.close(fd)
 
-        return mae, mse, fig_path
+        return mae, mse, mae_lyap, mse_lyap, fig_path
 
-    def plot_ensemble(self, y_esn_list, y_test_list, abs_err_list, sq_err_list):
+    def plot_ensemble(self, y_esn_list, y_test_list, abs_err_list, sq_err_list, source=None):
+
+        source = self.source or source
+        res = self.get_resolution(source)
+        t_lyap = T_LYAPUNOV.get(source)
+
+        y_esn = torch.stack(y_esn_list, 1)
+        y_test = torch.stack(y_test_list, 1)
+
+        y_esn_mean = torch.mean(y_esn, 1)
+        y_esn_std = torch.std(y_esn, 1)
+
+        t_esn = torch.arange(0, y_test.shape[0]) / res
+
+        n_outputs = y_esn.shape[2]
         
         c = colors.sample_colorscale(
             colors.get_colorscale('Plotly3'), 
             np.linspace(0, 0.9, self.n_ensemble),
         )
+        if n_outputs <= 3:
+            specs = [[{}, {'rowspan': n_outputs+2}]]
+            if n_outputs > 2:
+                specs[0][1]['type'] = 'scene'
+            specs.extend([[{}, None]]*(n_outputs+1))
+            cols = 2
+        else:
+            specs = None
+            cols = 1
         fig = subplots.make_subplots(
-            rows=self.n_outputs+2, cols=2, shared_xaxes='all',
+            rows=n_outputs+2, cols=cols, shared_xaxes=True, specs=specs,
         )
 
         for i in range(self.n_ensemble):
-            for j in range(self.n_outputs):
+            for j in range(n_outputs):
                 fig.add_scatter(
-                    # x=t_out,
-                    y=y_esn_list[i][:, j],
+                    x=t_esn,
+                    y=y_esn[:, i, j],
                     row=j+1,
                     col=1,
                     line_color=c[i],
@@ -270,32 +338,33 @@ class SweepESN(Sweep):
                     legendgroup=f'ESN {i}',
                     showlegend=False,
                 )
-                fig.add_scatter(
-                    # x=t_out,
-                    y=sq_err_list[i][:, j],
-                    row=j+1,
-                    col=2,
-                    line_color=c[i],
-                    name=f'ESN {i}',
-                    legendgroup=f'ESN {i}',
-                    showlegend=False,
-                )
                 if self.init_noise != 0:
                     fig.add_scatter(
-                        # x=t_out,
-                        y=y_test_list[i][:, j],
+                        x=t_esn,
+                        y=y_test[:, i, j],
                         row=j+1,
                         col=1,
                         line_color=c[i],
                         line_dash='dash',
-                        name=f'test data {i}',
+                        name=f'System data {i}',
                         legendgroup=f'ESN {i}',
                         showlegend=False,
                     )
+                # fig.add_scatter(
+                #     # x=t_esn,
+                #     y=sq_err_list[i][:, j],
+                #     row=j+1,
+                #     col=2,
+                #     line_color=c[i],
+                #     name=f'ESN {i}',
+                #     legendgroup=f'ESN {i}',
+                #     showlegend=False,
+                # )
 
             fig.add_scatter(
+                x=t_esn,
                 y=abs_err_list[i],
-                row=self.n_outputs+1,
+                row=n_outputs+1,
                 col=1,
                 line_color=c[i],
                 name=f'ESN {i}',
@@ -303,34 +372,96 @@ class SweepESN(Sweep):
                 showlegend=True,
             )
             fig.add_scatter(
+                x=t_esn,
                 y=sq_err_list[i],
-                row=self.n_outputs+2,
+                row=n_outputs+2,
                 col=1,
                 line_color=c[i],
                 name=f'ESN {i}',
                 legendgroup=f'ESN {i}',
                 showlegend=False,
             )
-            fig.add_scatter(
-                y=np.cumsum(abs_err_list[i]) / np.arange(1, len(abs_err_list[i])+1),
-                row=self.n_outputs+1,
-                col=2,
-                line_color=c[i],
-                name=f'ESN {i}',
-                legendgroup=f'ESN {i}',
-                showlegend=False,
-            )
-            fig.add_scatter(
-                y=np.cumsum(sq_err_list[i]) / np.arange(1, len(sq_err_list[i])+1),
-                row=self.n_outputs+2,
-                col=2,
-                line_color=c[i],
-                name=f'ESN {i}',
-                legendgroup=f'ESN {i}',
-                showlegend=False,
-            )
 
-        for i in range(self.n_outputs):
+            if i == 0 and t_lyap is not None:
+                t = t_lyap
+                while t < t_esn[-1]:
+                    fig.add_vline(x=t, row=n_outputs+1, col=1, line_color='black', line_dash='dot')
+                    fig.add_vline(x=t, row=n_outputs+2, col=1, line_color='black', line_dash='dot')
+                    t += t_lyap
+
+            if n_outputs == 3:
+                fig.add_scatter3d(
+                    x=y_esn[:, i, 0],
+                    y=y_esn[:, i, 1],
+                    z=y_esn[:, i, 2],
+                    row=1,
+                    col=2,
+                    line_color=c[i],
+                    name=f'ESN {i}',
+                    legendgroup=f'ESN {i}',
+                    showlegend=False,
+                    mode='lines',
+                    opacity=0.3,
+                )
+                if self.init_noise != 0:
+                    fig.add_scatter3d(
+                        x=y_test[:, i, 0],
+                        y=y_test[:, i, 1],
+                        z=y_test[:, i, 2],
+                        row=1,
+                        col=2,
+                        line_color=c[i],
+                        line_dash='dash',
+                        name=f'System data {i}',
+                        legendgroup=f'ESN {i}',
+                        showlegend=False,
+                        mode='lines',
+                    )
+            elif n_outputs == 2:
+                fig.add_scatter(
+                    x=y_esn[:, i, 0],
+                    y=y_esn[:, i, 1],
+                    row=1,
+                    col=2,
+                    line_color=c[i],
+                    name=f'ESN {i}',
+                    legendgroup=f'ESN {i}',
+                    showlegend=False,
+                    opacity=0.3,
+                )
+                if self.init_noise != 0:
+                    fig.add_scatter(
+                        x=y_test[:, i, 0],
+                        y=y_test[:, i, 1],
+                        row=1,
+                        col=2,
+                        line_color=c[i],
+                        line_dash='dash',
+                        name=f'System data {i}',
+                        legendgroup=f'ESN {i}',
+                        showlegend=False,
+                    )
+
+            # fig.add_scatter(
+            #     y=np.cumsum(abs_err_list[i]) / np.arange(1, len(abs_err_list[i])+1),
+            #     row=n_outputs+1,
+            #     col=2,
+            #     line_color=c[i],
+            #     name=f'ESN {i}',
+            #     legendgroup=f'ESN {i}',
+            #     showlegend=False,
+            # )
+            # fig.add_scatter(
+            #     y=np.cumsum(sq_err_list[i]) / np.arange(1, len(sq_err_list[i])+1),
+            #     row=n_outputs+2,
+            #     col=2,
+            #     line_color=c[i],
+            #     name=f'ESN {i}',
+            #     legendgroup=f'ESN {i}',
+            #     showlegend=False,
+            # )
+
+        for i in range(n_outputs):
             fig.update_yaxes(
                 row=i+1,
                 col=1,
@@ -344,40 +475,95 @@ class SweepESN(Sweep):
 
             if self.init_noise == 0:
                 fig.add_scatter(
-                    # x=t_out,
-                    y=y_test_list[0][:, i],
+                    x=t_esn,
+                    y=y_test[:, 0, i],
                     row=i+1,
                     col=1,
                     line_color='black',
-                    line_dash='dash',
-                    name=f'test data',
+                    # line_dash='dash',
+                    name=f'System data',
                     legendgroup=f'Test',
                     showlegend=i==0,
                 )
 
+                
+                fig.add_scatter(
+                    x=t_esn,
+                    y=y_esn_mean[:, i] - y_esn_std[:, i], 
+                    row=i+1, 
+                    col=1, 
+                    line_color='red', 
+                    showlegend=False, 
+                    opacity=0.9, 
+                    line_width=1,
+                    legendgroup='esn-fill', 
+                )
+
+                fig.add_scatter(
+                    x=t_esn,
+                    y=y_esn_mean[:, i] + y_esn_std[:, i], 
+                    row=i+1, 
+                    col=1, 
+                    line_color='red', 
+                    showlegend=(i==0), 
+                    opacity=0.9, 
+                    legendgroup='esn-fill', 
+                    name='Ensemble mean ±σ', 
+                    line_width=1,
+                    fillcolor='rgba(255, 0, 0, 0.2)', fill='tonexty')
+
+
+                if n_outputs == 3:
+                    fig.add_scatter3d(
+                        x=y_test[:, 0, 0],
+                        y=y_test[:, 0, 1],
+                        z=y_test[:, 0, 2],
+                        row=1,
+                        col=2,
+                        line_color='black',
+                        # line_dash='dash',
+                        name=f'System data {i}',
+                        legendgroup=f'Test',
+                        showlegend=False,
+                        mode='lines',
+                    )
+                elif n_outputs == 2:
+                    fig.add_scatter(
+                        x=y_test[:, 0, 0],
+                        y=y_test[:, 0, 1],
+                        row=1,
+                        col=2,
+                        line_color='black',
+                        # line_dash='dash',
+                        name=f'System data {i}',
+                        legendgroup=f'Test',
+                        showlegend=False,
+                    )
+
+            if n_outputs == 2:
+                fig.update_xaxes(title_text=r'$\frac{dx}{dt}$', col=2)
+                fig.update_yaxes(title_text='x', col=2)
+
         fig.update_yaxes(
-            row=self.n_outputs+1,
+            row=n_outputs+1,
             col=1,
             title_text='Absolute error',
         )
+        # fig.update_yaxes(
+        #     row=n_outputs+1,
+        #     col=2,
+        #     title_text='Absolute error (cumulative mean)',
+        # )
         fig.update_yaxes(
-            row=self.n_outputs+1,
-            col=2,
-            title_text='Absolute error (cumulative mean)',
-        )
-        fig.update_yaxes(
-            row=self.n_outputs+2,
+            row=n_outputs+2,
             col=1,
             title_text='Square error',
         )
-        fig.update_yaxes(
-            row=self.n_outputs+2,
-            col=2,
-            title_text='Square error (cumulative mean)',
-        )
-
-        fig.add_vline(x=self.n_test_err, row=self.n_outputs+1, col=2)
-        fig.add_vline(x=self.n_test_err, row=self.n_outputs+2, col=2)
+        # fig.update_yaxes(
+        #     row=n_outputs+2,
+        #     col=2,
+        #     title_text='Square error (cumulative mean)',
+        # )
 
         return fig
 
@@ -408,7 +594,7 @@ class SweepEnKF(Sweep):
         self.notebook_display = notebook_display
         self.additional_states = additional_states
 
-        self.resolution = self.set_resolution(self.source)
+        self.resolution = self.get_resolution(self.source)
         
         self.kfs = []
 
@@ -454,7 +640,8 @@ class SweepEnKF(Sweep):
         if i_kfs is None:
             return np.argmin([kf._epoch for kf in self.kfs])
         else:
-            return np.argmin([kf._epoch for i, kf in enumerate(self.kfs) if i in i_kfs])
+            i_train = np.argmin([kf._epoch for i, kf in enumerate(self.kfs) if i in i_kfs])
+            return i_kfs[i_train]
 
     def train(self, to_epochs, i_kfs=None):
         while True:
@@ -506,10 +693,12 @@ class SweepEnKF(Sweep):
             x_0 = x[-1, :, :].mean(axis=0)
             x_enkf_no_noise, y_enkf_no_noise_raw = kf.predict(x_0[None, :], self.n_test, False, False)
 
+        t_enkf = torch.arange(0, self.n_test) / self.resolution
+
         x_enkf_no_noise = x_enkf_no_noise[:, 0, :]
         y_enkf_no_noise_raw = y_enkf_no_noise_raw[:, 0, :]
 
-        mse, mae, sq_err, abs_err = self.calc_err(y_enkf_no_noise_raw)
+        mse, mae, sq_err, abs_err, mse_lyap, mae_lyap  = self.calc_err(y_enkf_no_noise_raw)
         
         y_test = (self.y_test * self.y_std) + self.y_mean
         y_enkf = (y_enkf_raw * self.y_std) + self.y_mean
@@ -553,6 +742,33 @@ class SweepEnKF(Sweep):
         y_upper = y_max + 0.5 * self.y_std
         y_lower = y_min - 0.5 * self.y_std
 
+        fig.add_scatter(
+            x=t_enkf,
+            y=abs_err,
+            row=n_subplots-1,
+            col=1,
+            line_color='black',
+            name=f'Abs error',
+            showlegend=False,
+        )
+        fig.add_scatter(
+            x=t_enkf,
+            y=sq_err,
+            row=n_subplots,
+            col=1,
+            line_color='black',
+            name=f'Square error',
+            showlegend=False,
+        )
+
+        t_lyap = T_LYAPUNOV.get(self.source)
+        if t_lyap is not None:
+            t = t_lyap
+            while t < t_enkf[-1]:
+                fig.add_vline(x=t, row=n_outputs+1, col=1, line_color='black', line_dash='dot')
+                fig.add_vline(x=t, row=n_outputs+2, col=1, line_color='black', line_dash='dot')
+                t += t_lyap
+
         for j in range(n_subplots - 2):
             if j >= n_outputs:
                 plot_enkf = x_enkf
@@ -569,6 +785,7 @@ class SweepEnKF(Sweep):
             if show_ensemble:
                 for i in range(kf.n_particles):
                     fig.add_scatter(
+                        x=t_enkf,
                         y=plot_enkf[:, i, j], 
                         name='Ensemble mean ±σ', 
                         row=j+1, 
@@ -581,8 +798,9 @@ class SweepEnKF(Sweep):
 
             if j < n_outputs:
                 fig.add_scatter(
+                    x=t_enkf,
                     y=y_test[:, j], 
-                    name='system data', 
+                    name='System data', 
                     row=j+1,
                     col=1, 
                     line_color='black', 
@@ -591,6 +809,7 @@ class SweepEnKF(Sweep):
                 )
 
             fig.add_scatter(
+                x=t_enkf,
                 y=plot_enkf_mean[:, j] - plot_enkf_std[:, j], 
                 row=j+1, 
                 col=1, 
@@ -602,6 +821,7 @@ class SweepEnKF(Sweep):
             )
 
             fig.add_scatter(
+                x=t_enkf,
                 y=plot_enkf_mean[:, j] + plot_enkf_std[:, j],
                 row=j+1, 
                 col=1, 
@@ -614,6 +834,7 @@ class SweepEnKF(Sweep):
                 fillcolor='rgba(255, 0, 0, 0.2)', fill='tonexty')
 
             fig.add_scatter(
+                x=t_enkf,
                 y=plot_enkf_no_noise[:, j], 
                 name='EnKF (no noise)', 
                 row=j+1, 
@@ -724,23 +945,6 @@ class SweepEnKF(Sweep):
                 fig.update_xaxes(title_text='x', col=2)
                 fig.update_yaxes(title_text='y', col=2)
 
-        fig.add_scatter(
-            y=abs_err,
-            row=n_subplots-1,
-            col=1,
-            line_color='black',
-            name=f'Abs error',
-            showlegend=False,
-        )
-        fig.add_scatter(
-            y=sq_err,
-            row=n_subplots,
-            col=1,
-            line_color='black',
-            name=f'Square error',
-            showlegend=False,
-        )
-
         fig.update_yaxes(
             row=n_subplots-1,
             col=1,
@@ -771,8 +975,9 @@ class SweepEnKF(Sweep):
         kf = self.kfs[i]
         ll, x = kf.log_likelihood(self.y_train, dt=1/self.resolution)
         x_0 = x[-1, :, :].mean(axis=0)
-        _, y_enkf_no_noise = kf.predict(x_0[None, :], self.n_test_err, False, False)
-        return self.calc_err(y_enkf_no_noise)
+        _, y_enkf_no_noise = kf.predict(x_0[None, :], self.n_test, False, False)
+        return self.calc_err(y_enkf_no_noise[:, 0, :])
+
 
 def prepare_enkf(
     n_outputs, 
