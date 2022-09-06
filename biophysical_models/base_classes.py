@@ -276,6 +276,17 @@ class PressureVolume(nn.Module):
         """
         return self.p_0 * (torch.exp(self.lam * (v - self.v_0)) - 1)
 
+    def p_ed_linear(self, v: torch.Tensor) -> torch.Tensor:
+        """Linearisation of p_ed (Jallon, 2009)
+
+        Args:
+            v (torch.Tensor): Volume
+
+        Returns:
+            torch.Tensor: End diastolic pressure
+        """
+        return self.p_0 * self.lam * (v - self.v_0)
+
     def dp_ed_dv(self, v: torch.Tensor) -> torch.Tensor:
         """Derivative of end-diastolic pressure wrt volume
 
@@ -477,11 +488,11 @@ class DynamicCardiacDriver(ODEBase):
                 (bpm). Defaults to hr(t) = 80.
         """
         super().__init__()
-        self.a = nn.Parameter(torch.as_tensor(a))
-        self.b = nn.Parameter(torch.as_tensor(b))
-        # Not used, just for parameter setting compatibility:
-        self.hr = nn.Parameter(torch.as_tensor(0.0))
+        self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
+        self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
         self.f_hr = hr
+        # Not used, just for parameter setting compatibility:
+        self.hr = nn.Parameter(torch.as_tensor(0.0), requires_grad=False)
 
     def model(
         self, 
@@ -536,10 +547,10 @@ class RespiratoryPatternGenerator(ODEBase):
 
     def __init__(
         self, 
-        hb: float = 1.0,  # Jallon: units not given
+        hb: float = convert(1.0, '1/l'),  # Jallon: units not given, assumed 1/l
         a: float = -0.8, 
-        b: float = -3, 
-        alpha: float = 1,
+        b: float = -3.0, 
+        alpha: float = 1.0,  # Jallon: units not given, assumed 1/s
         lam: float = convert(1.5, 'mmHg'),
         mu: float = convert(1.0, 'mmHg'),  # 1.08504
         beta: float = 0.1,
@@ -569,12 +580,12 @@ class RespiratoryPatternGenerator(ODEBase):
         """
         super().__init__()
         self.hb = nn.Parameter(torch.as_tensor(hb))
-        self.a = nn.Parameter(torch.as_tensor(a))
-        self.b = nn.Parameter(torch.as_tensor(b))
+        self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
+        self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
         self.alpha = nn.Parameter(torch.as_tensor(alpha))
         self.lam = nn.Parameter(torch.as_tensor(lam))
-        self.mu = nn.Parameter(torch.as_tensor(mu))
-        self.beta = nn.Parameter(torch.as_tensor(beta))
+        self.mu = nn.Parameter(torch.as_tensor(mu), requires_grad=False)
+        self.beta = nn.Parameter(torch.as_tensor(beta), requires_grad=False)
 
     def model(
         self, 
