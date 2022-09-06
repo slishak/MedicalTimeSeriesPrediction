@@ -127,6 +127,7 @@ class SmithCardioVascularSystem(ODEBase):
         p_pl_is_input: bool = False, 
         f_hr: Optional[Callable] = None, 
         volume_ratios: bool = False,
+        v_spt_method: str = 'xitorch',
         **kwargs,
     ):
         """Initialise. All parameters passed to nn.Module. 
@@ -142,6 +143,8 @@ class SmithCardioVascularSystem(ODEBase):
             volume_ratios (bool, optional): Use blood volume proportions as ODE
                 states. Otherwise, use raw volumes. Allows v_tot parameter 
                 sensitivities to be found correctly. Defaults to False.
+            v_spt_method (str, optional): either 'xitorch', 'newton' or 
+                'jallon'. Defaults to 'xitorch'.
         """
 
         super().__init__(*args, **kwargs)
@@ -200,8 +203,7 @@ class SmithCardioVascularSystem(ODEBase):
         # Jallon 2009 modification
         self.p_pl_affects_pu_and_pa = nn.Parameter(torch.tensor(False), requires_grad=False)
 
-        # Newton or xitorch
-        self._v_spt_method = 'xitorch'
+        self._v_spt_method = v_spt_method
         # First initial guess for v_spt
         self._v_spt_old = self._default_v_spt()
         self._v_spt_last = self._v_spt_old
@@ -458,7 +460,10 @@ class SmithCardioVascularSystem(ODEBase):
             states['s'] = torch.tensor(0., device=device)
 
         # Store initial v_spt
-        init_outputs = self.pressures_volumes(torch.tensor(0., device=device), states)
+        # If p_pl is an input, it needs to be passed, but the value doesn't matter as we only
+        # need v_spt which doesn't depend on it
+        p_pl = torch.tensor(0.0, device=device)
+        init_outputs = self.pressures_volumes(torch.tensor(0., device=device), states, p_pl)
         self._v_spt_old = init_outputs['v_spt'].detach()
         
         return states
@@ -506,6 +511,22 @@ class SmithCardioVascularSystem(ODEBase):
                 f_rtol=rtol,
                 maxiter=100,
             )
+        elif self._v_spt_method == 'jallon':
+            # Linearisation from Jallon 2009
+            num = e_t * (
+                self.lvf.p_es(v_lv) - self.rvf.p_es(v_rv) + 
+                self.spt.e_es * self.spt.v_d
+            ) + (1 - e_t) * (
+                self.lvf.p_ed_linear(v_lv) - self.rvf.p_ed_linear(v_rv) + 
+                self.spt.lam * self.spt.p_0 * self.spt.v_0
+            )
+            den = e_t * (
+                self.lvf.e_es + self.rvf.e_es + self.spt.e_es
+            ) + (1 - e_t) * (
+                self.lvf.lam * self.lvf.p_0 + 
+                self.rvf.lam * self.rvf.p_0 + 
+                self.spt.lam * self.spt.p_0)
+            v_spt = num/den
         else:
             raise NotImplementedError(self._v_spt_method)
             
@@ -742,16 +763,22 @@ class JallonHeartLungs(ODEBase):
         super().__init__(*args, **kwargs)
         self.resp_pattern = RespiratoryPatternGenerator()
         self.resp = PassiveRespiratorySystem()
-        self.cvs = SmithCardioVascularSystem(p_pl_is_input=True, f_hr=f_hr)
+        self.cvs = SmithCardioVascularSystem(p_pl_is_input=True, f_hr=f_hr, v_spt_method='jallon')
+
+        self.state_names = (
+            self.resp_pattern.state_names + 
+            self.resp.state_names + 
+            self.cvs.state_names
+        )
 
         # Jallon CVS model modifications
         with torch.no_grad():
             # Table 2 of Jallon 2009
-            # self.cvs.spt.e_es.copy_(torch.tensor(convert(3750, 'mmHg/l')))  # Wrong units in paper
-            # self.cvs.spt.lam.copy_(torch.tensor(convert(35, '1/l')))
-            # self.cvs.vc.e_es.copy_(torch.tensor(convert(2, 'mmHg/l')))
+            self.cvs.spt.e_es.copy_(torch.tensor(convert(3750, 'mmHg/l')))  # Wrong units in paper
+            self.cvs.spt.lam.copy_(torch.tensor(convert(35, '1/l')))
+            self.cvs.vc.e_es.copy_(torch.tensor(convert(2, 'mmHg/l')))
             # # HR = 54bpm
-            # self.cvs.e.hr.copy_(torch.tensor(54.0))
+            self.cvs.e.hr.copy_(torch.tensor(54.0))
             # Eq 2.9, 2.10
             self.cvs.p_pl_affects_pu_and_pa.copy_(torch.tensor(True))
 
@@ -822,13 +849,15 @@ class JallonHeartLungs(ODEBase):
 def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
 
     class BloodPressureMetrics(cls):
-        state_names: ClassVar[list[str]] = cls.state_names + [
-            'p_aod', 'p_aos', 'p_aom', 'p_vcm', 'p_pad', 'p_pas', 'p_pam',
-        ]
 
         def __init__(self, *args, **kwargs):
             assert kwargs.get('f_hr') is not None, "Must use dynamic HR for BP metrics"
             super().__init__(*args, **kwargs)
+
+            self.state_names = self.state_names + [
+                'p_aod', 'p_aos', 'p_aom', 'p_vcm', 'p_pad', 'p_pas', 'p_pam',
+            ]
+
             self.moving_avg_weight = nn.Parameter(torch.tensor(2.0), requires_grad=False)
             self.moving_avg_weight_s = nn.Parameter(torch.tensor(0.01), requires_grad=False)
             self.moving_avg_weight_d = nn.Parameter(torch.tensor(0.05), requires_grad=False)
