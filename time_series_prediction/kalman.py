@@ -1,5 +1,6 @@
 from typing import Optional, Type
 from time import perf_counter
+from io import BytesIO
 
 import torch
 import numpy as np
@@ -309,6 +310,20 @@ class AD_EnKF:
 
         return ll, x
 
+    def _get_checkpoint(self, ll):
+        c = {
+            'll': ll,
+            'epoch': self._epoch,
+            'model_state_dict': self.transition_function.state_dict(),
+            'noise_state_dict': self.process_noise.state_dict(),
+            'opt_state_dict': self._opt.state_dict(),
+        }
+        buffer = BytesIO()
+        torch.save(c, buffer)
+        buffer.seek(0)
+        out = torch.load(buffer)
+        return out
+
     def train(
         self, 
         obs_train: torch.Tensor, 
@@ -324,6 +339,7 @@ class AD_EnKF:
         print_timing: bool = False,
         dt: Optional[float] = None,
         save_checkpoints: Optional[str] = None,
+        auto_scale_lr: bool = False,
     ):
         """Train the transition function and the process noise models using
         AD-EnKF.
@@ -364,19 +380,30 @@ class AD_EnKF:
             save_checkpoints (str, optional): Save model state after each 
                 epoch in self.checkpoints. 'epoch' to save after each epoch,
                 'step' after each optimiser step. Defaults to None.
+            auto_scale_lr (bool, optional): Automatically scale learning rate
+                for each parameter depending on its initial magnitude. Defaults
+                to False.
         """
 
         if self._opt is None:
-            lambda1 = lambda2 = lambda epoch: (epoch+1-lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
+            lr_lambda = lambda epoch: (epoch+1-lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
             alpha = self.transition_function.parameters()
             beta = self.process_noise.parameters()
-            self._opt = torch.optim.Adam([
-                {'params': alpha, 'lr': lr_alpha},
-                {'params': beta, 'lr': lr_beta},
-            ])
+            if auto_scale_lr:
+                opt_params = []
+                for param in alpha:
+                    if param.requires_grad:
+                        opt_params.append({
+                            'params': [param],
+                            'lr': lr_alpha * param.data
+                        })
+            else:
+                opt_params = [{'params': alpha, 'lr': lr_alpha}]
+            opt_params.append({'params': beta, 'lr': lr_beta})
+            self._opt = torch.optim.Adam(opt_params)
             # From https://github.com/ymchen0/torchEnKF/blob/016b4f8412310c195671c81790d372bd6cd9dc95/examples/l96_NN_demo.py
             self._scheduler = torch.optim.lr_scheduler.LambdaLR(
-                self._opt, lr_lambda=[lambda1, lambda2])
+                self._opt, lr_lambda=[lr_lambda] * len(opt_params))
             self._epoch = 0
             if save_checkpoints:
                 self.checkpoints = []
@@ -444,22 +471,10 @@ class AD_EnKF:
                 self._opt.step()
 
                 if save_checkpoints == 'step':
-                    self.checkpoints.append({
-                        'll': ll_sum,
-                        'epoch': self._epoch,
-                        'model_state_dict': self.transition_function.state_dict(),
-                        'noise_state_dict': self.process_noise.state_dict(),
-                        'opt_state_dict': self._opt.state_dict(),
-                    })
+                    self.checkpoints.append(self._get_checkpoint(ll.detach()))
 
             if save_checkpoints == 'epoch':
-                self.checkpoints.append({
-                    'll': ll_sum,
-                    'epoch': self._epoch,
-                    'model_state_dict': self.transition_function.state_dict(),
-                    'noise_state_dict': self.process_noise.state_dict(),
-                    'opt_state_dict': self._opt.state_dict(),
-                })
+                self.checkpoints.append(self._get_checkpoint(ll_sum))
 
             if print_timing:
                 t3 = perf_counter()
