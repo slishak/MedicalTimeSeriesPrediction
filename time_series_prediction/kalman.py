@@ -8,7 +8,7 @@ from plotly import graph_objects as go
 from plotly import subplots
 from torch import nn
 from IPython.display import display
-from torchdiffeq import odeint
+from torchdiffeq import odeint, odeint_adjoint
 
 from time_series_prediction import settings
 
@@ -131,6 +131,7 @@ class AD_EnKF:
         taper_radius: Optional[float] = None,
         neural_ode: bool = False,
         odeint_kwargs: Optional[dict] = None,
+        adjoint: bool = False,
     ):
         """Learn the dynamics of a dataset using AD-EnKF, with linear state
         observations. The number of states and observations are defined by 
@@ -157,6 +158,8 @@ class AD_EnKF:
                 computes the next discrete state
             odeint_kwargs (dict, optional): kwargs to pass to odeint when 
                 transition function is a neural ODE.
+            adjoint (bool, optional): Use adjoint solver with neural ODE. 
+                Defaults to False.
         """
 
         self.transition_function = transition_function
@@ -170,6 +173,7 @@ class AD_EnKF:
         if odeint_kwargs is None:
             odeint_kwargs = {'method': 'rk4', 'options': {'step_size': 0.01}}
         self.odeint_kwargs = odeint_kwargs
+        self.adjoint = adjoint
 
         if init_state_distribution is None:
             init_state_distribution = torch.distributions.MultivariateNormal(
@@ -272,7 +276,11 @@ class AD_EnKF:
             if self.neural_ode:
                 t = i_t * dt + t_0
                 t_ode = torch.tensor([t, t+dt], dtype=torch.float32, device=settings.device)
-                x_hat = odeint(self.transition_function, x_i, t_ode, **self.odeint_kwargs)[-1]
+                if self.adjoint:
+                    solver = odeint_adjoint
+                else:
+                    solver = odeint
+                x_hat = solver(self.transition_function, x_i, t_ode, **self.odeint_kwargs)[-1]
             else:
                 x_hat = self.transition_function(None, x_i)
             x_hat = self.process_noise(x_hat)
@@ -445,12 +453,11 @@ class AD_EnKF:
                 if print_timing:
                     t2 = perf_counter()
                     print(f'Test step: {t2-t1:.3f}s, ll={ll_test}')
+                if self.neural_ode:
+                    self.transition_function.trajectory = []
             else:
                 ll_test = None
                 t2 = t1
-
-            if self.neural_ode:
-                self.transition_function.trajectory = []
 
             # Training
             x_0 = None
@@ -459,13 +466,16 @@ class AD_EnKF:
                 ta = perf_counter()
                 self._opt.zero_grad()
                 t_0 = j*dt
-                print(f't={t_0:.2f}s')
+                if print_timing:
+                    print(f't={t_0:.2f}s')
                 ll, x = self.log_likelihood(obs_train[j:j+subseq_len, :], x_0, dt=dt, t_0=t_0)
                 tb = perf_counter()
-                print(f'Log likelihood: {tb-ta:.3f}s, ll={ll}')
+                if print_timing:
+                    print(f'Log likelihood: {tb-ta:.3f}s, ll={ll}')
                 (-ll).backward()
                 tc = perf_counter()
-                print(f'Backward pass: {tc-tb:.3f}s')
+                if print_timing:
+                    print(f'Backward pass: {tc-tb:.3f}s')
                 ll_sum = ll_sum + ll.detach()
                 x_0 = x[-1, :, :].detach()
                 self._opt.step()
@@ -581,7 +591,11 @@ class AD_EnKF:
 
             if not include_observation_noise:
                 t = torch.arange(0, (n+1)*dt, dt, device=settings.device)
-                x_kf = odeint(self.transition_function, x_0, t)
+                if self.adjoint:
+                    solver = odeint_adjoint
+                else:
+                    solver = odeint
+                x_kf = solver(self.transition_function, x_0, t)
                 y_kf = torch.mm(self.observation_matrix, x_kf.T).T
             else:
                 raise NotImplementedError('todo')
