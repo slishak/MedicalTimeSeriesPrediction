@@ -33,7 +33,13 @@ def load_data(cvs_cls: Type[models.ODEBase], path='ZW0064.json', save_traj=False
     t = torch.tensor(df.index.array, dtype=torch.float32, device=settings.device)
     hr = torch.tensor(df['Pulse'].to_numpy(), dtype=torch.float32, device=settings.device)
     f_hr = lambda t_i: Interp1d()(t, hr, t_i[None])[0, 0]
-    cvs = cvs_cls(f_hr=f_hr, save_traj=save_traj, verbose=verbose, volume_ratios=True)
+    cvs = cvs_cls(
+        f_hr=f_hr, 
+        save_traj=save_traj, 
+        verbose=verbose, 
+        volume_ratios=True, 
+        # v_spt_method='jallon',
+    )
 
 
     y = []
@@ -60,6 +66,7 @@ def get_enkf(
     rtol=1e-6,
     atol=1e-7,
     max_step=1e-2,
+    adjoint=False,
 ):
     
     # cvs_cls = models.add_bp_metrics(models.SmithCardioVascularSystem)
@@ -72,19 +79,19 @@ def get_enkf(
         n_outputs,
     ).to(settings.device)
 
-    # proc_noise = kalman.ScalarNoise(
-    #     torch.tensor([init_proc_noise], device=settings.device), 
-    #     n_states,
-    # ).to(settings.device)
+    proc_noise = kalman.ScalarNoise(
+        torch.tensor([init_proc_noise], device=settings.device), 
+        n_states,
+    ).to(settings.device)
 
     scales = torch.ones(n_states, device=settings.device)
     for state in ['p_aod', 'p_aos', 'p_aom', 'p_vcm', 'p_pad', 'p_pas', 'p_pam', 's']:
         scales[cvs.state_names.index(state)] = 0
 
-    proc_noise = kalman.ScaledDiagonalNoise(
-        torch.tensor([init_proc_noise], device=settings.device), 
-        scales,
-    ).to(settings.device)
+    # proc_noise = kalman.ScaledDiagonalNoise(
+    #     torch.tensor([init_proc_noise], device=settings.device), 
+    #     scales,
+    # ).to(settings.device)
 
     cvs.e.a.requires_grad_(False)
 
@@ -105,8 +112,9 @@ def get_enkf(
             'method': 'dopri5',
             'rtol': rtol,
             'atol': atol,
-            'options': {'max_step': max_step},
-        }
+            'options': {'max_step': max_step, 'min_step': 1e-5},
+        },
+        adjoint=adjoint
     )
 
     return kf
