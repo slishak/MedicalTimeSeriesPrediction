@@ -3,12 +3,14 @@ from typing import ClassVar, Optional, Callable
 
 import torch
 from torch import nn
-from torchdiffeq import odeint, odeint_adjoint
+from torchdiffeq import odeint, odeint_adjoint, RejectStepError
 
 from biophysical_models.unit_conversions import convert
 
 
 class ODEBase(ABC, nn.Module):
+
+    # TODO: This should be set in __init__ as it's no longer static
     state_names: ClassVar[list[str]]
 
     """Base class for ODE problems.
@@ -86,6 +88,11 @@ class ODEBase(ABC, nn.Module):
         states = self.ode_state_dict(x)
         outputs = self.model(t, states)
         deriv = self.ode_deriv_tensor(outputs)
+
+        if deriv.isnan().any():
+            raise RejectStepError('NaN derivative value')
+        if deriv.isinf().any():
+            raise RejectStepError('Infinite derivative value')
 
         return deriv
 
@@ -228,7 +235,14 @@ class PressureVolume(nn.Module):
         Returns:
             torch.Tensor: Chamber pressure
         """
-        return e_t * self.p_es(v) + (1 - e_t) * self.p_ed(v)
+
+        p_es = self.p_es(v)
+        p_ed = self.p_ed(v)
+        if (p_ed.abs() > p_es.abs()).any():
+            # print('Reject: ED>ES')
+            raise RejectStepError('Reject: ED>ES')
+
+        return e_t * p_es + (1 - e_t) * p_ed
 
     def dp_dv(self, v: torch.Tensor, e_t: torch.Tensor) -> torch.Tensor:
         """Derivative of chamber pressure wrt volume
