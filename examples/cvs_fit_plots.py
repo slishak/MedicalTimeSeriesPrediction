@@ -2,8 +2,8 @@ import pickle as pkl
 
 import torch
 import pandas as pd
+import plotly.io as pio
 from plotly.subplots import make_subplots
-from plotly.colors import DEFAULT_PLOTLY_COLORS
 
 from biophysical_models import models
 from cvs_example import latex
@@ -120,10 +120,11 @@ if __name__ == '__main__':
         df2 = simulate(cvs)
 
         # Collate plot data: list of (colour, name, df)
+        colorway = pio.templates['plotly_white'].layout.colorway
         plot_data = [
             ('black', 'Patient', df_patient),
-            (DEFAULT_PLOTLY_COLORS[0], 'Before training', df),
-            (DEFAULT_PLOTLY_COLORS[1], 'After 20 epochs', df2),
+            (colorway[0], 'Before training', df),
+            (colorway[1], 'After 20 epochs', df2),
         ]
 
         # Save for refernece (expensive to generate)
