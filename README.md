@@ -5,11 +5,15 @@ Modelling and prediction of medical time series from biophysical models and ICU 
 
 Requires packages in [requirements.txt](requirements.txt) and Python 3.9. 
 
-Currently requires custom branch of torchdiffeq for AD-EnKF
-`pip install git+https://github.com/slishak/torchdiffeq@manually-reject-step`, pending merge of https://github.com/rtqichen/torchdiffeq/pull/210.
+Currently requires custom branch of torchdiffeq for AD-EnKF, pending merge of https://github.com/rtqichen/torchdiffeq/pull/210:
+```
+pip install git+https://github.com/slishak/torchdiffeq@manually-reject-step
+```
 
 Install [torch.interp1d](https://github.com/aliutkus/torchinterp1d) in the same way (only required for fitting biomechanical models with AD-EnKF):
-`pip install git+https://github.com/aliutkus/torchinterp1d`
+```
+pip install git+https://github.com/aliutkus/torchinterp1d
+```
 
 ## Packages
 
@@ -28,12 +32,11 @@ The [`examples`](examples) folder contains various Python scripts and Jupyter no
 ```
 
 The example scripts are not documented in as detail as the implementation packages. Some key example scripts are:
-
-    - [`cvs_example.py`](examples/cvs_example.py): Simulate a cardiovascular system ODE model. Requires some commenting/uncommenting to choose the type of simulation to run.
-    - [`esn_hyperparameter_sweep.ipynb`](examples/esn_hyperparameter_sweep.ipynb) runs a large sweep of Echo State Networks on the example ODE problems with varied hyperparameters, and plots the results.
-    - [`esn_hyperparameter_sweep_jallon.ipynb`](examples/esn_hyperparameter_sweep_jallon.ipynb) does the same but using data from the Jallon heart-lung model
-    - [`enkf_activation.ipynb`](examples/enkf_activation.ipynb) is an example sweep of activation function options when training an RNN with AD-EnKF on the three example ODE problems.
-    - [`enkf_jallon.ipynb](examples/enkf_jallon.ipynb) tries to fit RNNs of two different architectures to data from the Jallon heart-lung model
+- [`cvs_example.py`](examples/cvs_example.py): Simulate a cardiovascular system ODE model. Requires some commenting/uncommenting to choose the type of simulation to run.
+- [`esn_hyperparameter_sweep.ipynb`](examples/esn_hyperparameter_sweep.ipynb) runs a large sweep of Echo State Networks on the example ODE problems with varied hyperparameters, and plots the results.
+- [`esn_hyperparameter_sweep_jallon.ipynb`](examples/esn_hyperparameter_sweep_jallon.ipynb) does the same but using data from the Jallon heart-lung model
+- [`enkf_activation.ipynb`](examples/enkf_activation.ipynb) is an example sweep of activation function options when training an RNN with AD-EnKF on the three example ODE problems.
+- [`enkf_jallon.ipynb`](examples/enkf_jallon.ipynb) tries to fit RNNs of two different architectures to data from the Jallon heart-lung model
 
 
 ## References
