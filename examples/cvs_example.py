@@ -239,33 +239,35 @@ def latex(s):
 
 if __name__ == '__main__':
 
+    # Choose a type of cardiovascular simulation to run from the three classes:
+
     cvs_class = SmithCardioVascularSystem
     # cvs_class = InertialSmithCVS
     # cvs_class = JallonHeartLungs
 
-    # cvs_class = add_bp_metrics(cvs_class)
+    # Choose a heartrate model. None uses the default static model. Defining
+    # a function of time causes the variable heartrate model to be used. 
 
-    # f_hr = None
+    f_hr = None
     # f_hr = lambda t: torch.full_like(t, fill_value=80.)
     # f_hr = lambda t: torch.full_like(t, fill_value=54.)
     # f_hr = lambda t: 80 + 20 * torch.tanh(0.3 * (t - 40))
 
-    # cvs = cvs_class(f_hr=f_hr)
+    # Comment/uncomment to include blood pressure metric model. f_hr cannot be 
+    # None if this is uncommented.
+    # cvs_class = add_bp_metrics(cvs_class)
+
+    # Instantiate cardiovascular simulation class
+    cvs = cvs_class(f_hr=f_hr)
+
+    # Uncomment this to use the Jallon v_spt linearisation
     # cvs._v_spt_method = 'jallon'
 
-    cvs_cls = add_bp_metrics(SmithCardioVascularSystem)
-    _, _, cvs = cvs_fit.load_data(cvs_cls, save_traj=True)
-    # params = torch.load('params.to')
-    # cvs.load_state_dict(params)
+    t_final = 20  # seconds
+    resolution = 50  # Hz
 
     with torch.no_grad():
-        # cvs.resp_pattern.beta.copy_(torch.tensor(0.0))
-        t_sol, sol = cvs.simulate(500, 50)
-
-    
-    # cvs2 = cvs_class(f_hr=f_hr, v_spt_method='jallon')
-    # with torch.no_grad():
-    #     t_sol2, sol2 = cvs2.simulate(10, 50)
+        t_sol, sol = cvs.simulate(t_final, resolution)
 
     t, x, dx_dt, outputs = zip(*cvs.trajectory)
     t = torch.tensor(t)
@@ -273,71 +275,7 @@ if __name__ == '__main__':
     df = pd.DataFrame(outputs).apply(lambda s: [float(x) for x in s])
     df['t'] = t
     
-    # t2, _, _, outputs2 = zip(*cvs2.trajectory)
-    # t2 = torch.tensor(t2)
-    # df2 = pd.DataFrame(outputs2).apply(lambda s: [float(x) for x in s])
-    # df2['t'] = t2
-
-    fig_states = plot_states(cvs, df, t, x)
-    fig_states.write_html('states.html', auto_open=True, include_mathjax='cdn')
-
-    # fig = plot_outputs(df)
-    # fig.write_html('cvs.html', auto_open=True, include_mathjax='cdn')
-
+    plot_states(cvs, df, t, x).write_html('states.html', auto_open=True, include_mathjax='cdn')
     plot_vent_interaction(df).write_html('vent.html', auto_open=True, include_mathjax='cdn')
     plot_lv_pressures(df).write_html('lv.html', auto_open=True, include_mathjax='cdn')
     plot_rv_pressures(df).write_html('rv.html', auto_open=True, include_mathjax='cdn')
-
-    # Respiratory system plot
-    # if isinstance(cvs, JallonHeartLungs):
-    #     fig_r = make_subplots(rows=4, cols=1, shared_xaxes='all')
-    #     fig_r.add_scatter(x=df['t'], y=df['x'], name='x', row=1, col=1)
-    #     fig_r.add_scatter(x=df['t'], y=df['y'], name='y', row=1, col=1)
-        
-    #     fig_r.add_scatter(x=df['t'], y=df['v_th'], name='v_th', row=3, col=1)
-    #     fig_r.add_scatter(x=df['t'], y=df['p_pl'], name='p_pl', row=4, col=1)
-    #     fig_r.add_scatter(x=df['t'], y=df['p_mus'], name='p_mus', row=4, col=1)
-
-    #     fig_r.write_html('resp.html', auto_open=True)
-
-    # if 'p_aod' in cvs.state_names:
-    #     fig_metrics = make_subplots(
-    #         rows=4, 
-    #         cols=2, 
-    #         specs=[
-    #             [{}, {}], 
-    #             [{}, {}], 
-    #             [{}, {}], 
-    #             [{'secondary_y': True}, {'secondary_y': True}],
-    #         ],
-    #         shared_xaxes='columns',
-    #         # horizontal_spacing=0.02,
-    #         column_widths=[3, 1],
-    #     )
-    #     for c in [1, 2]:
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_ao'], line_color='black', row=1, col=c, showlegend=False)
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_aom'], line_color='black', line_dash='dash', row=1, col=c, showlegend=False)
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_aos'], line_color='red', row=1, col=c, showlegend=False)
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_aod'], line_color='blue', row=1, col=c, showlegend=False)
-
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_pa'], line_color='black', row=2, col=c, showlegend=False)
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_pam'], line_color='black', line_dash='dash', row=2, col=c, showlegend=False)
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_pas'], line_color='red', row=2, col=c, showlegend=False)
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_pad'], line_color='blue', row=2, col=c, showlegend=False)
-            
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_vc'], line_color='black', row=3, col=c, showlegend=False)
-    #         fig_metrics.add_scatter(x=df['t'], y=df['p_vcm'], line_color='black', line_dash='dash', row=3, col=c, showlegend=False)
-
-    #         fig_metrics.add_scatter(x=df['t'], y=df['e_t'], line_color='red', row=4, col=c, showlegend=False, secondary_y=True)
-    #         fig_metrics.add_scatter(x=t, y=f_hr(t), line_color='black', row=4, col=c, showlegend=False)
-
-    #     fig_metrics.update_yaxes(title_text=r'$P_{ao}$', row=1, col=1)
-    #     fig_metrics.update_yaxes(title_text=r'$P_{pa}$', row=2, col=1)
-    #     fig_metrics.update_yaxes(title_text=r'$P_{vc}$', row=3, col=1)
-    #     fig_metrics.update_yaxes(title_text='HR', row=4, col=1, secondary_y=False)
-    #     fig_metrics.update_yaxes(title_text=r'$e(t)$', title_font_color='red', row=4, col=1, secondary_y=True)
-
-    #     fig_metrics.update_xaxes(title_text='t', row=4)
-
-    #     fig_metrics.write_html('metrics.html', auto_open=True, include_mathjax='cdn')
-

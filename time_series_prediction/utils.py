@@ -200,7 +200,6 @@ class SweepESN(Sweep):
         k_l2: float = 0, 
         **esn_kwargs,
     ):
-        t1 = perf_counter()
 
         if self.y_train is None:
             y_full = self.generate_data(self.source or source)
@@ -213,14 +212,18 @@ class SweepESN(Sweep):
             y_std = self.y_std
             n_outputs = self.n_outputs
 
+        u_train = torch.empty((self.n_train, 0), device=settings.device)
+        u_test = torch.empty((self.n_test, 0), device=settings.device)
+
+        t1 = perf_counter()
+
         esn = echo_state_network.ESN(
             n_inputs=0, 
             n_outputs=n_outputs,
             **esn_kwargs
         )
 
-        u_train = torch.empty((self.n_train, 0), device=settings.device)
-        u_test = torch.empty((self.n_test, 0), device=settings.device)
+        t2 = perf_counter()
 
         x_train = esn.train(
             u_train, 
@@ -228,6 +231,9 @@ class SweepESN(Sweep):
             n_discard,
             k_l2,
         )
+
+        t3 = perf_counter()
+
         x_init = x_train[-1, :]
         y_init = y_train[-1, :]
         _, y_test_esn = esn.predict(
@@ -242,12 +248,14 @@ class SweepESN(Sweep):
         y_esn_unscaled = (y_test_esn * y_std) + y_mean
         y_test_unscaled = (y_test * y_std) + y_mean
 
-        t2 = perf_counter()
-        print(f't={t2-t1:.3f}s')
+        t4 = perf_counter()
 
-        return mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled
+        dt = [t3 - t2, t3 - t1, t4 - t1]
+        # print(f't={dt:.3f}s')
+
+        return mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled, dt
         
-    def run_ensemble(self, esn_kwargs):
+    def run_ensemble(self, esn_kwargs, return_timing=False):
         y_esn_list = []
         y_test_list = []
         abs_err_list = []
@@ -256,34 +264,36 @@ class SweepESN(Sweep):
         mse_list = []
         mse_lyap_list = []
         mae_lyap_list = []
+        timing = []
 
         for i in range(self.n_ensemble):
-            print(f'{i+1}/{self.n_ensemble}')
+            # print(f'{i+1}/{self.n_ensemble}')
 
-            mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled = self.train_esn(
+            mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled, dt = self.train_esn(
                 **esn_kwargs
             )
 
-            y_esn_list.append(y_esn_unscaled)
-            y_test_list.append(y_test_unscaled)
-            abs_err_list.append(abs_err)
-            sq_err_list.append(sq_err)
-            mae_list.append(mae)
-            mse_list.append(mse)
+            y_esn_list.append(y_esn_unscaled.cpu())
+            y_test_list.append(y_test_unscaled.cpu())
+            abs_err_list.append(abs_err.cpu())
+            sq_err_list.append(sq_err.cpu())
+            mae_list.append(mae.cpu())
+            mse_list.append(mse.cpu())
             mae_lyap_list.append(mae_lyap)
             mse_lyap_list.append(mse_lyap)
+            timing.append(dt)
 
         mae = torch.stack(mae_list)
         mse = torch.stack(mse_list)
         if mae_lyap_list[0] is not None:
-            mae_lyap = torch.stack(mae_lyap_list)
-            mse_lyap = torch.stack(mse_lyap_list)
+            mae_lyap = torch.stack(mae_lyap_list).cpu()
+            mse_lyap = torch.stack(mse_lyap_list).cpu()
         else:
             mae_lyap = None
             mse_lyap = None
         
-        print(f'MAE {torch.mean(mae)} ± {torch.std(mae)}')
-        print(f'MSE {torch.mean(mse)} ± {torch.std(mse)}')
+        # print(f'MAE {torch.mean(mae)} ± {torch.std(mae)}')
+        # print(f'MSE {torch.mean(mse)} ± {torch.std(mse)}')
 
         fig = self.plot_ensemble(y_esn_list, y_test_list, abs_err_list, sq_err_list, self.source or esn_kwargs.get('source'))
 
@@ -291,7 +301,10 @@ class SweepESN(Sweep):
         fig.write_json(fig_path)
         os.close(fd)
 
-        return mae, mse, mae_lyap, mse_lyap, fig_path
+        if return_timing:
+            return mae, mse, mae_lyap, mse_lyap, fig_path, timing
+        else:
+            return mae, mse, mae_lyap, mse_lyap, fig_path
 
     def plot_ensemble(self, y_esn_list, y_test_list, abs_err_list, sq_err_list, source=None):
 

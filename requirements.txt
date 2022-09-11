@@ -7,3 +7,4 @@ pandas
 plotly
 ipython
 torchinterp1d
+dask.distributed
