@@ -51,8 +51,8 @@ The example scripts are not documented in as detail as the implementation packag
 
 
 ## References
-1. Herbert Jaeger. ‘The “echo state” approach to analysing and training recurrent neural networks-with an erratum note’. In: Bonn, Germany: German National Research Center for Information Technology GMD Technical Report 148 (Jan. 2001).
-2. Yuming Chen, Daniel Sanz-Alonso and Rebecca Willett. ‘Auto-differentiable Ensemble Kalman Filters’. In: SIAM Journal on Mathematics of Data Science 4.2 (2022), pp. 801–833. doi: 10.1137/21M1434477. url: https://doi.org/10.1137/21M1434477.
-3. Bram W Smith et al. ‘Minimal haemodynamic system model including ventricular interaction and valve dynamics’. en. In: Med. Eng. Phys. 26.2 (Mar. 2004), pp. 131–139.
-4. Julie Fontecave Jallon et al. ‘A model of mechanical interactions between heart and lungs’. In: Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering Sciences 367.1908 (2009), pp. 4741–4757. doi: 10.1098/rsta.2009.0137. eprint: url: https://royalsocietypublishing.org/doi/abs/10.1098/rsta.2009.0137.
-5. Sabine Paeme et al. ‘Mathematical multi-scale model of the cardiovascular system including mitral valve dynamics. Application to ischemic mitral insufficiency’. In: BioMedical Engineering OnLine 10.1 (Sept. 2011), p. 86. issn: 1475-925X. doi: 10.1186/1475-925X-10-86. url: https://doi.org/10.1186/1475-925X-10-86.
+1. Herbert Jaeger. _‘The “echo state” approach to analysing and training recurrent neural networks-with an erratum note’_. In: Bonn, Germany: German National Research Center for Information Technology GMD Technical Report 148 (Jan. 2001).
+2. Yuming Chen, Daniel Sanz-Alonso and Rebecca Willett. _‘Auto-differentiable Ensemble Kalman Filters’_. In: SIAM Journal on Mathematics of Data Science 4.2 (2022), pp. 801–833. doi: 10.1137/21M1434477. url: https://doi.org/10.1137/21M1434477.
+3. Bram W Smith et al. _‘Minimal haemodynamic system model including ventricular interaction and valve dynamics’_. en. In: Med. Eng. Phys. 26.2 (Mar. 2004), pp. 131–139.
+4. Julie Fontecave Jallon et al. _‘A model of mechanical interactions between heart and lungs’_. In: Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering Sciences 367.1908 (2009), pp. 4741–4757. doi: 10.1098/rsta.2009.0137. eprint: url: https://royalsocietypublishing.org/doi/abs/10.1098/rsta.2009.0137.
+5. Sabine Paeme et al. _‘Mathematical multi-scale model of the cardiovascular system including mitral valve dynamics. Application to ischemic mitral insufficiency’_. In: BioMedical Engineering OnLine 10.1 (Sept. 2011), p. 86. issn: 1475-925X. doi: 10.1186/1475-925X-10-86. url: https://doi.org/10.1186/1475-925X-10-86.
