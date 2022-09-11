@@ -1,7 +1,7 @@
 # Medical Time Series Prediction
 **MSc Computational Statistics and Machine Learning, University College London**
 
-Modelling and prediction of medical time series from biophysical models and ICU data, using echo state networks (ESN) [1] and ensemble Kalman filters (AD-EnKF) [2].
+Modelling and prediction of medical time series from biophysical models and ICU data, using echo state networks (ESN) [[1]](#references) and ensemble Kalman filters (AD-EnKF) [[2]](#references).
 
 Requires packages in [requirements.txt](requirements.txt) and Python 3.9. 
 
@@ -19,7 +19,7 @@ pip install git+https://github.com/aliutkus/torchinterp1d
 
 Two Python packages are included in this respository. 
 [`time_series_prediction`](time_series_prediction) contains code that implements ESN and AD-EnKF with PyTorch. Example ODE problems are the Lorenz and Rössler attractors, and a forced Van der Pol oscillator.
-[`biomechanical_models`](biophysical_models) contains Python implementations of Smith's inertial/non-cardiovascular models [3], and Jallon's heart-lung model [4]. Parameters from Paeme [5] are also used.
+[`biomechanical_models`](biophysical_models) contains Python implementations of Smith's inertial/non-cardiovascular models [[3]](#references), and Jallon's heart-lung model [[4]](#references). Parameters from Paeme [[5]](#references) are also used.
 
 ## Example scripts
 
