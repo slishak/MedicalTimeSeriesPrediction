@@ -1,11 +1,8 @@
-
-from turtle import title
 import pandas as pd
 import torch
 import plotly.io as pio
 from plotly.subplots import make_subplots
 from plotly import colors
-from scipy.integrate import cumulative_trapezoid
 
 from biophysical_models.models import SmithCardioVascularSystem, JallonHeartLungs, InertialSmithCVS, add_bp_metrics
 from biophysical_models.unit_conversions import convert
