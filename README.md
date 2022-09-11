@@ -38,6 +38,17 @@ The example scripts are not documented in as detail as the implementation packag
 - [`enkf_activation.ipynb`](examples/enkf_activation.ipynb) is an example sweep of activation function options when training an RNN with AD-EnKF on the three example ODE problems.
 - [`enkf_jallon.ipynb`](examples/enkf_jallon.ipynb) tries to fit RNNs of two different architectures to data from the Jallon heart-lung model
 
+## Pretty pictures
+
+### ESN predictions on Rössler attractor
+![ESN predictions on Rössler attractor](esn-rossler-lyap-best.png)
+
+### AD-EnKF predictions on Lorenz attractor
+![AD-EnKF predictions on Lorenz attractor](enkf-lorenz-best-err.png)
+
+### AD-EnKF predictions on Jallon model
+![AD-EnKF predictions on Jallon model](enkf-jallon-pred-wide.png)
+
 
 ## References
 1. Herbert Jaeger. ‘The “echo state” approach to analysing and training recurrent neural networks-with an erratum note’. In: Bonn, Germany: German National Research Center for Information Technology GMD Technical Report 148 (Jan. 2001).
