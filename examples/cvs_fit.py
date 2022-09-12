@@ -33,6 +33,8 @@ def load_data(cvs_cls: Type[models.ODEBase], path='ZW0064.json', save_traj=False
     t = torch.tensor(df.index.array, dtype=torch.float32, device=settings.device)
     hr = torch.tensor(df['Pulse'].to_numpy(), dtype=torch.float32, device=settings.device)
     f_hr = lambda t_i: Interp1d()(t, hr, t_i[None])[0, 0]
+    
+    # Using v_spt_method='jallon' substantially speeds up backward pass
     cvs = cvs_cls(
         f_hr=f_hr, 
         save_traj=save_traj, 
