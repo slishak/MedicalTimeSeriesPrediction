@@ -6,6 +6,8 @@ from scipy import constants
 
 @dataclass
 class Unit:
+    """Definition of a physical unit."""
+    
     name: str
     value: float
     default: bool = False
@@ -16,6 +18,7 @@ class Quantity:
 
     TODO: this could be massively simplified
     """
+
     _units = {
         'pressure': [
             Unit('kPa', constants.kilo),
@@ -54,8 +57,10 @@ class Quantity:
     }
 
     def __init__(self, value: float, unit: str):
-        """Initialise. Internally converts to the "default" unit corresponding
-        to whatever unit is passed in
+        """Initialise.
+        
+        Internally converts to the "default" unit corresponding to whatever 
+        unit is passed in.
 
         Args:
             value (float): Number
@@ -67,7 +72,7 @@ class Quantity:
         self.value, self._base_unit, self._quantity = self._convert(value, unit)
 
     def to(self, unit: str) -> float:
-        """Convert to a different unit
+        """Convert to a different unit.
 
         Args:
             unit (str): Unit to convert to
@@ -98,7 +103,7 @@ class Quantity:
         return default_unit.name
 
     def _conversion_factor(self, conversions: list[Unit], old_unit: str, new_unit: str) -> float:
-        """Conversion factor from old_unit to new_unit
+        """Conversion factor from old_unit to new_unit.
 
         Args:
             conversions (list[Unit]): List of Units containing old_unit and 
@@ -134,7 +139,7 @@ class Quantity:
         old_unit: str, 
         new_unit: Optional[str] = None
     ) -> tuple[float, str, str]:
-        """Convert a value from an old to new unit
+        """Convert a value from an old to new unit.
 
         Args:
             value (float): Number
@@ -149,7 +154,6 @@ class Quantity:
             - new_unit (str): New unit
             - quantity (str): Type of quantity (e.g. volume)
         """
-
         if self._quantity is None:
             for quantity, conversions in self._units.items():
                 factor = self._conversion_factor(conversions, old_unit, new_unit)
@@ -172,10 +176,11 @@ class Quantity:
 
 
 def convert(value: float, unit: Optional[str] = None, to: Optional[str] = None) -> float:
-    """Convert a value from one unit to another. At least one of `unit`
-    and `to` must be set. If they are both set, they must both be units 
-    representing the same quantity (i.e. there must be a dimensionless 
-    multiplier to convert from one to the other).
+    """Convert a value from one unit to another.
+    
+    At least one of `unit` and `to` must be set. If they are both set, they 
+    must both be units representing the same quantity (i.e. there must be a 
+    dimensionless multiplier to convert from one to the other).
 
     Args:
         value (float): Value to convert

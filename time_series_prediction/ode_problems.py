@@ -15,7 +15,7 @@ def vdp(
     omega_1: float = 0.2, 
     omega_2: float = 0.3,
 ) -> np.ndarray:
-    """Forced Van der Pol oscillator
+    """Forced Van der Pol oscillator.
 
     d2x/dt2 - mu(1-x^2) dx/dt  + x - A sin(omega_1*t) + B sin(omega_2*t) = 0
 
@@ -45,7 +45,7 @@ def lorenz(
     sigma: float = 10.0, 
     beta: float = 8/3,
 ) -> np.ndarray:
-    """Lorenz attractor
+    """Lorenz attractor.
 
     dx/dt = sigma*(y-x)
     dy/dt = x*(rho-z) - y
@@ -77,7 +77,7 @@ def rossler(
     b: float = 0.2, 
     c: float = 5.7,
 ) -> np.ndarray:
-    """Rössler attractor
+    """Rössler attractor.
 
     dx/dt = -y-z
     dy/dt = x + a*y

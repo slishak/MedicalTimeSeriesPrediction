@@ -9,7 +9,6 @@ from biophysical_models.unit_conversions import convert
 
 
 class ODEBase(ABC, nn.Module):
-
     """Base class for ODE problems.
     
     state_names must be set in the child class definition: a list of strings
@@ -17,7 +16,7 @@ class ODEBase(ABC, nn.Module):
     """
 
     def __init__(self, state_names: list[str], verbose: bool = True, save_traj: bool = True):
-        """Initialises nn.Module
+        """Initialise nn.Module.
 
         Args:
             state_names (list[str]): list of state names.
@@ -35,7 +34,7 @@ class ODEBase(ABC, nn.Module):
         self.verbose = verbose
 
     def ode_state_dict(self, states: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Convert a tensor of ODE states to a dict
+        """Convert a tensor of ODE states to a dict.
 
         Args:
             states (torch.Tensor): ODE state tensor
@@ -46,7 +45,7 @@ class ODEBase(ABC, nn.Module):
         return {name: states[..., i] for i, name in enumerate(self.state_names)}
 
     def ode_state_tensor(self, outputs: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Convert a dict of ODE states to a tensor
+        """Convert a dict of ODE states to a tensor.
 
         Args:
             states (torch.Tensor): ODE states formatted as dict
@@ -61,7 +60,7 @@ class ODEBase(ABC, nn.Module):
         return state
 
     def ode_deriv_tensor(self, outputs: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Convert a dict of ODE outputs to a derivative tensor
+        """Convert a dict of ODE outputs to a derivative tensor.
 
         Args:
             outputs (torch.Tensor): ODE outputs formatted as dict
@@ -69,7 +68,6 @@ class ODEBase(ABC, nn.Module):
         Returns:
             dict[str, torch.Tensor]: ODE state derivative tensor
         """
-
         deriv = torch.stack([
             outputs[f'd{state}_dt'] for state in self.state_names
         ], -1)
@@ -77,7 +75,7 @@ class ODEBase(ABC, nn.Module):
         return deriv
 
     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """ODE function (forward pass)
+        """ODE function (forward pass).
 
         Args:
             t (torch.Tensor): Time (s)
@@ -86,7 +84,6 @@ class ODEBase(ABC, nn.Module):
         Returns:
             torch.Tensor: ODE derivative tensor
         """
-
         states = self.ode_state_dict(x)
         outputs = self.model(t, states)
         deriv = self.ode_deriv_tensor(outputs)
@@ -101,6 +98,7 @@ class ODEBase(ABC, nn.Module):
     @abstractmethod
     def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """To be implemented in subclass. Implementation of ODE model.
+
         Should output a dict of tensors, at least containing a "d{state}_dt"
         key for every state.
 
@@ -115,8 +113,7 @@ class ODEBase(ABC, nn.Module):
 
     @abstractmethod
     def init_states(self, device: str = 'cpu') -> dict[str, torch.Tensor]:
-        """To be implemented in subclass. Initial states of ODE.
-        """
+        """To be implemented in subclass. Initial states of ODE."""
         pass
 
     def simulate(
@@ -129,6 +126,7 @@ class ODEBase(ABC, nn.Module):
         max_step: float = 1e-2,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Simulate model. Returns regularly spaced time and state tensors.
+
         Outputs at integration steps available in self.trajectory.
 
         Args:
@@ -144,7 +142,6 @@ class ODEBase(ABC, nn.Module):
             - t (torch.Tensor): Time tensor
             - sol (torch.Tensor): State tensor
         """
-
         self.trajectory = []
         states = self.init_states()
         x_0 = self.ode_state_tensor(states)
@@ -167,8 +164,9 @@ class ODEBase(ABC, nn.Module):
         return t, sol
 
     def callback_accept_step(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor):
-        """Called by torchdiffeq at the end of a successful step. Used to 
-        build outputs (irregularly-spaced grid) in self.trajectory
+        """Called by torchdiffeq at the end of a successful step.
+        
+        Used to build outputs (irregularly-spaced grid) in self.trajectory
 
         NOTE: Only works with torchdiffeq from master branch
 
@@ -195,7 +193,8 @@ class PressureVolume(nn.Module):
     """Model of a pressure-volume relationship, with end systolic and end 
     diastolic pressure-volume relationships (ESPVR/EDPVR).
     
-    (Smith, 2004)"""
+    (Smith, 2004)
+    """
 
     def __init__(
         self, 
@@ -205,7 +204,7 @@ class PressureVolume(nn.Module):
         lam: Optional[float], 
         p_0: Optional[float],
     ):
-        """Initialise
+        """Initialise.
 
         Args:
             e_es (Optional[float]): End-systolic elastance (if None, no
@@ -227,7 +226,7 @@ class PressureVolume(nn.Module):
 
     def p(self, v: torch.Tensor, e_t: torch.Tensor) -> torch.Tensor:
         """Chamber pressure due to volume and time-varying cardiac driving
-        function
+        function.
 
         Args:
             v (torch.Tensor): Volume
@@ -237,7 +236,6 @@ class PressureVolume(nn.Module):
         Returns:
             torch.Tensor: Chamber pressure
         """
-
         p_es = self.p_es(v)
         p_ed = self.p_ed(v)
         if (p_ed.abs() > p_es.abs()).any():
@@ -247,7 +245,7 @@ class PressureVolume(nn.Module):
         return e_t * p_es + (1 - e_t) * p_ed
 
     def dp_dv(self, v: torch.Tensor, e_t: torch.Tensor) -> torch.Tensor:
-        """Derivative of chamber pressure wrt volume
+        """Derivative of chamber pressure wrt volume.
 
         Args:
             v (torch.Tensor): Volume
@@ -260,7 +258,7 @@ class PressureVolume(nn.Module):
         return e_t * self.dp_es_dv(v) + (1 - e_t) * self.dp_ed_dv(v)
 
     def p_es(self, v: torch.Tensor) -> torch.Tensor:
-        """Calculate end systolic pressure
+        """Calculate end systolic pressure.
 
         Args:
             v (torch.Tensor): Volume
@@ -271,7 +269,7 @@ class PressureVolume(nn.Module):
         return self.e_es * (v - self.v_d)
 
     def dp_es_dv(self, v: torch.Tensor) -> torch.Tensor:
-        """Derivative of end-systolic pressure wrt volume
+        """Derivative of end-systolic pressure wrt volume.
 
         Args:
             v (torch.Tensor): Volume
@@ -282,7 +280,7 @@ class PressureVolume(nn.Module):
         return self.e_es
 
     def p_ed(self, v: torch.Tensor) -> torch.Tensor:
-        """Calculate end diastolic pressure
+        """Calculate end diastolic pressure.
 
         Args:
             v (torch.Tensor): Volume
@@ -293,7 +291,7 @@ class PressureVolume(nn.Module):
         return self.p_0 * (torch.exp(self.lam * (v - self.v_0)) - 1)
 
     def p_ed_linear(self, v: torch.Tensor) -> torch.Tensor:
-        """Linearisation of p_ed (Jallon, 2009)
+        """Linearisation of p_ed (Jallon, 2009).
 
         Args:
             v (torch.Tensor): Volume
@@ -304,7 +302,7 @@ class PressureVolume(nn.Module):
         return self.p_0 * self.lam * (v - self.v_0)
 
     def dp_ed_dv(self, v: torch.Tensor) -> torch.Tensor:
-        """Derivative of end-diastolic pressure wrt volume
+        """Derivative of end-diastolic pressure wrt volume.
 
         Args:
             v (torch.Tensor): Volume
@@ -316,12 +314,13 @@ class PressureVolume(nn.Module):
             
 
 class BloodVessel(nn.Module):
-    """Blood vessel with resistance according to Poiseuille's equation
+    """Blood vessel with resistance according to Poiseuille's equation.
     
-    (Smith, 2004)"""
+    (Smith, 2004)
+    """
 
     def __init__(self, r: float):
-        """Initialise 
+        """Initialise.
 
         Args:
             r (float): Resistance parameter
@@ -330,7 +329,7 @@ class BloodVessel(nn.Module):
         self.r = nn.Parameter(torch.as_tensor(r))
 
     def flow_rate(self, p_upstream: torch.Tensor, p_downstream: torch.Tensor) -> torch.Tensor:
-        """Volume flow rate due to pressure differential
+        """Volume flow rate due to pressure differential.
 
         Args:
             p_upstream (torch.Tensor): Pressure upstream of vessel
@@ -347,9 +346,10 @@ class BloodVessel(nn.Module):
 # flow rate through a closed valve and pass it into the valve open function?
 
 class Valve(BloodVessel):
-    """Simple non-inertial valve
+    """Simple non-inertial valve.
     
-    (Smith, 2004)"""
+    (Smith, 2004)
+    """
 
     def open(
         self, 
@@ -358,6 +358,7 @@ class Valve(BloodVessel):
         q_flow: torch.Tensor
     ) -> torch.Tensor:
         """Return status of non-inertial valve: 0 for closed, 1 for open.
+
         Simple valve law: valve opens on positive flow, and closes to prevent
         flow reversing
 
@@ -373,7 +374,7 @@ class Valve(BloodVessel):
 
     def flow_rate(self, p_upstream: torch.Tensor, p_downstream: torch.Tensor) -> torch.Tensor:
         """Volume flow rate through valve, given pressure before and after the 
-        valve
+        valve.
 
         Args:
             p_upstream (torch.Tensor): Pressure upstream of valve
@@ -387,12 +388,13 @@ class Valve(BloodVessel):
 
 
 class InertialValve(Valve):
-    """Inertial valve
+    """Inertial valve.
     
-    (Smith, 2004)"""
+    (Smith, 2004)
+    """
 
     def __init__(self, r: float, l: float):
-        """Initialise
+        """Initialise.
 
         Args:
             r (float): Resistance of open valve
@@ -407,8 +409,9 @@ class InertialValve(Valve):
         p_downstream: torch.Tensor, 
         q_flow: torch.Tensor
     ) -> torch.Tensor:
-        """Return status of inertial valve: 0 for closed, 1 for open. Inertial
-        valve law: open on positive pressure gradient, close on reversed flow.
+        """Return status of inertial valve: 0 for closed, 1 for open. 
+        
+        Inertial valve law: open on positive pressure gradient, close on reversed flow.
 
         Args:
             p_upstream (torch.Tensor): Pressure upstream of valve
@@ -440,15 +443,15 @@ class InertialValve(Valve):
         Returns:
             torch.Tensor: Volume flow rate derivative
         """
-
         d_q_dt = (p_upstream - p_downstream - q_flow * self.r) / self.l
         return torch.where(self.open(p_upstream, p_downstream, q_flow), d_q_dt, 0.0)
 
 
 class CardiacDriver(nn.Module):
-    """Cardiac driver function
+    """Cardiac driver function.
     
-    (Smith, 2004)"""
+    (Smith, 2004)
+    """
 
     def __init__(
         self, 
@@ -456,7 +459,7 @@ class CardiacDriver(nn.Module):
         b: float = 80.0, 
         hr: float = 80.0,
     ):
-        """Initialise
+        """Initialise.
 
         Args:
             a (float, optional): Scale parameter. Defaults to 1.0
@@ -477,7 +480,6 @@ class CardiacDriver(nn.Module):
         Returns:
             torch.Tensor: e(t)
         """
-
         t_wrapped = torch.remainder(t, 60 / self.hr)
         e = self.a * torch.exp(-self.b * (t_wrapped - 30 / self.hr)**2)
 
@@ -485,6 +487,11 @@ class CardiacDriver(nn.Module):
 
 
 class DynamicCardiacDriver(ODEBase):
+    """Dynamic cardiac driver.
+
+    Defined in MSc thesis. Introduces an extra state to allow time-varying 
+    heart rate.
+    """
 
     def __init__(
         self,
@@ -492,8 +499,7 @@ class DynamicCardiacDriver(ODEBase):
         b: float = 80.0,
         hr: Callable = lambda t: torch.tensor(80.)
     ):
-
-        """Initialise
+        """Initialise.
 
         Args:
             a (float, optional): Scale parameter. Defaults to 1.0
@@ -513,7 +519,7 @@ class DynamicCardiacDriver(ODEBase):
         t: torch.Tensor, 
         states: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """Derivatives of dynamic cardiac driver model
+        """Derivatives of dynamic cardiac driver model.
 
         Args:
             t (torch.Tensor): Time (s)
@@ -522,7 +528,6 @@ class DynamicCardiacDriver(ODEBase):
         Returns:
             dict[str, torch.Tensor]:  ODE derivatives formatted as dict
         """
-
         hr = self.f_hr(t)
         if states['s'].ndim:
             hr = hr.expand(*states['s'].shape)
@@ -538,7 +543,7 @@ class DynamicCardiacDriver(ODEBase):
         }
 
     def init_states(self, device: str = 'cpu') -> dict[str, torch.Tensor]:
-        """Initial states of dynamic cardiac driver function
+        """Set initial states of dynamic cardiac driver function.
 
         Args:
             device (str, optional): PyTorch device. Defaults to 'cpu'.
@@ -546,7 +551,6 @@ class DynamicCardiacDriver(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
         """
-
         return {
             's': torch.tensor(0.0, device=device),
         }
@@ -555,7 +559,8 @@ class DynamicCardiacDriver(ODEBase):
 class RespiratoryPatternGenerator(ODEBase):
     """Lienard system of ODEs
     
-    (Jallon, 2009)"""
+    (Jallon, 2009)
+    """
 
     def __init__(
         self, 
@@ -605,7 +610,7 @@ class RespiratoryPatternGenerator(ODEBase):
         states: dict[str, torch.Tensor],
         dv_alv_dt: torch.Tensor = torch.tensor(0.0),
     ) -> dict[str, torch.Tensor]:
-        """Derivatives of central respiratory pattern generator
+        """Derivatives of central respiratory pattern generator.
 
         Args:
             t (torch.Tensor): Time (s)
@@ -615,7 +620,6 @@ class RespiratoryPatternGenerator(ODEBase):
         Returns:
             dict[str, torch.Tensor]:  ODE derivatives formatted as dict
         """
-
         dx_dt = self.alpha * (self.lienard(states['x'], states['y']) - self.hb * dv_alv_dt)
         dy_dt = self.alpha * states['x']
         dp_mus_dt = self.lam * states['y'] + self.mu - self.beta * states['p_mus']
@@ -623,7 +627,7 @@ class RespiratoryPatternGenerator(ODEBase):
         return {'dx_dt': dx_dt, 'dy_dt': dy_dt, 'dp_mus_dt': dp_mus_dt}
     
     def lienard(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Lienard function
+        """Lienard function.
 
         Args:
             x (torch.Tensor): x value
@@ -636,7 +640,7 @@ class RespiratoryPatternGenerator(ODEBase):
         return f
 
     def init_states(self, device='cpu') -> dict[str, torch.Tensor]:
-        """Initial states of Lienard system
+        """Set initial states of Lienard system.
 
         Args:
             device (str, optional): PyTorch device. Defaults to 'cpu'.
@@ -644,7 +648,6 @@ class RespiratoryPatternGenerator(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
         """
-
         return {
             'x': torch.tensor(-0.6, device=device),
             'y': torch.tensor(0.0, device=device),

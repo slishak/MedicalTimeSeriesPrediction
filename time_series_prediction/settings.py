@@ -4,7 +4,7 @@ device = torch.device('cpu')
 
 
 def switch_device(to: str):
-    """Switch global PyTorch device setting
+    """Switch global PyTorch device setting.
 
     Args:
         to (str): 'cpu' or 'cuda'

@@ -1,7 +1,7 @@
 import os
 from tempfile import mkdtemp, mkstemp
 from time import perf_counter
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Any
 from itertools import product
 
 import torch
@@ -14,14 +14,23 @@ from dask.distributed import Client, progress
 from time_series_prediction import kalman, echo_state_network, settings, ode_problems
 
 
-# TODO: Update these
 T_LYAPUNOV = {
     'lorenz': 1.104,
     'rossler': 14.0,
 }
 
 
-def param_sweep(params: list[tuple[str, list]]):
+def param_sweep(params: list[tuple[str, list]]) -> list[dict[str, Any]]:
+    """Get list of parameter dicts.
+
+    Uses itertools.product to get all combinations of parameters.
+
+    Args:
+        params (list[tuple[str, list]]): List of (name, values).
+
+    Returns:
+        list[dict[str, Any]]: List of parameter dicts.
+    """
     keys, vals = zip(*params)
     d = [{k: v for k, v in zip(keys, val)} for val in product(*vals)]
     print(f'{len(d)} simulations')
@@ -29,6 +38,8 @@ def param_sweep(params: list[tuple[str, list]]):
 
 
 class Sweep:
+    """Parameter sweep base class."""
+
     def __init__(
         self,
         n_warmup: int = 1000,
@@ -39,6 +50,22 @@ class Sweep:
         init_noise: float = 0.0,
         source: Optional[str] = None,
     ):
+        """Initialise.
+
+        Args:
+            n_warmup (int, optional): Number of initial points to ignore. 
+                Defaults to 1000.
+            n_train (int, optional): Size of training set. Defaults to 4000.
+            n_test (int, optional): Size of test set. Defaults to 4000.
+            n_test_err (int, optional): Number of points for test error. 
+                Defaults to 1000.
+            noise (float, optional): Isotropic noise added to standardised
+                data. Defaults to 1e-2.
+            init_noise (float, optional): Isotropic noise added to initial
+                states. Defaults to 0.0.
+            source (Optional[str], optional): ODE data source. Defaults to
+                None.
+        """
         self.n_warmup = n_warmup
         self.n_train = n_train
         self.n_test = n_test
@@ -59,13 +86,30 @@ class Sweep:
             self.n_outputs = None
 
     @staticmethod
-    def get_resolution(source):
+    def get_resolution(source: str) -> int:
+        """Get resolution for a given source.
+
+        Args:
+            source (str): Name of ODE source.
+
+        Returns:
+            int: Resolution (Hz).
+        """
         if source in ('vdp', 'rossler'):
             return 10
         else:
             return 50
 
-    def generate_data(self, source=None):
+    def generate_data(self, source: Optional[str] = None) -> torch.Tensor:
+        """Generate data from an ODE.
+
+        Args:
+            source (Optional[str], optional): ODE source. If None, use 
+                self.source. Defaults to None.
+
+        Returns:
+            torch.Tensor: Simulated states.
+        """
         if source is None:
             source = self.source
         y, _, _ = ode_problems.generate_data(
@@ -78,7 +122,24 @@ class Sweep:
 
         return y
 
-    def unscale(self, y, y_mean=None, y_std=None):
+    def unscale(
+        self, 
+        y: torch.Tensor, 
+        y_mean: Optional[torch.Tensor] = None, 
+        y_std: Optional[torch.Tensor]=None
+    ) -> torch.Tensor:
+        """Undo standardisation of data.
+
+        Args:
+            y (torch.Tensor): Standardised states.
+            y_mean (Optional[torch.Tensor], optional): Mean state value. If 
+                None, use self.y_mean. Defaults to None.
+            y_std (Optional[torch.Tensor], optional): Std of state values. If
+                None, use self.y_std. Defaults to None.
+
+        Returns:
+            torch.Tensor: Un-standardised states.
+        """
         if y_mean is None:
             y_mean = self.y_mean
             y_std = self.y_std
@@ -87,7 +148,22 @@ class Sweep:
 
         return y_unscaled
 
-    def split_train_test(self, y):
+    def split_train_test(
+        self, 
+        y: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Split train and test data.
+
+        Args:
+            y (torch.Tensor): Simulated states
+
+        Returns:
+            tuple containing:
+            - torch.Tensor: Training data.
+            - torch.Tensor: Test data.
+            - torch.Tensor: Mean of training data.
+            - torch.Tensor: Std of training data.
+        """
         y_full = y[self.n_warmup:, :]
 
         y_train_raw = y_full[:self.n_train, :]
@@ -104,7 +180,34 @@ class Sweep:
 
         return y_train, y_test, y_mean, y_std
 
-    def calc_err(self, y_pred, y_test=None, source=None):
+    def calc_err(
+        self, 
+        y_pred: torch.Tensor, 
+        y_test: Optional[torch.Tensor] = None,
+        source: Optional[str] = None
+    ) -> tuple[torch.Tensor]:
+        """Calculate error on test set.
+
+        Args:
+            y_pred (torch.Tensor): Predicted values.
+            y_test (Optional[torch.Tensor], optional): Test values.  If None, 
+                use self.y_test. Defaults to None.
+            source (Optional[str], optional): Name of data source. If None, use
+                self.source. Defaults to None.
+
+        Returns:
+            tuple containing:
+            - torch.Tensor: Average mean squared error over first 
+                self.n_test_err points
+            - torch.Tensor: Average mean absolute error over first
+                self.n_test_err points
+            - torch.Tensor: Square error over all dimensions for each point.
+            - torch.Tensor: Absolute error for each point.
+            - torch.Tensor: Square error over all dimensions averaged over each
+                Lyapunov time.
+            - torch.Tensor: Absolute error over all dimensions averaged over 
+                each Lyapunov time.
+        """
         if y_test is None:
             y_test = self.y_test
         if source is None:
@@ -146,6 +249,8 @@ class Sweep:
 
 
 class SweepESN(Sweep):
+    """Echo state network sweep."""
+
     def __init__(
         self,
         param_dicts: list[dict],
@@ -153,6 +258,15 @@ class SweepESN(Sweep):
         n_ensemble: int = 10,
         **kwargs
     ):
+        """Initialise.
+
+        Args:
+            param_dicts (list[dict]): List of parameter dicts.
+            esn_kwargs (dict, optional): Constant arguments to ESN initialiser.
+                Defaults to {}.
+            n_ensemble (int, optional): Number of ESNs to train for each set
+                of parameters. Defaults to 10.
+        """
         super().__init__(**kwargs)
         self.param_dicts = param_dicts
         self.esn_kwargs = esn_kwargs
@@ -160,7 +274,14 @@ class SweepESN(Sweep):
 
         self.plot_folder = mkdtemp(prefix='esn-ensemble-')
 
-    def submit_jobs(self, client: Client, show_progress=True):
+    def submit_jobs(self, client: Client, show_progress: bool = True):
+        """Submit jobs to a dask.distributed.Client.
+
+        Args:
+            client (Client): Client to submit jobs to.
+            show_progress (bool, optional): Show a progress bar in a notebook 
+                context. Defaults to True.
+        """
         self.jobs = []
         for d in self.param_dicts:
             esn_kwargs = self.esn_kwargs | d
@@ -169,7 +290,12 @@ class SweepESN(Sweep):
         if show_progress:
             return progress(self.jobs)
 
-    def get_results(self):
+    def get_results(self) -> list[dict[str, Any]]:
+        """Get results from dask.distributed.Client.
+
+        Returns:
+            list[dict[str, Any]]: List of result dicts.
+        """
         rows = []
         for task, d in zip(self.jobs, self.param_dicts):
             mae, mse, mae_lyap, mse_lyap, fig_path = task.result()
@@ -200,8 +326,33 @@ class SweepESN(Sweep):
         n_discard: int = 100, 
         k_l2: float = 0, 
         **esn_kwargs,
-    ):
+    ) -> tuple:
+        """Train an ESN.
 
+        Args:
+            source (str, optional): ODE source. If None, use self.source. 
+                Defaults to None.
+            n_discard (int, optional): Number of initial points to discard in 
+                linear regression. Defaults to 100.
+            k_l2 (float, optional): L2 regularisation weight. Defaults to 0.
+
+        Returns:
+            tuple containing:
+            - torch.Tensor: Average mean squared error over first 
+                self.n_test_err points
+            - torch.Tensor: Average mean absolute error over first
+                self.n_test_err points
+            - torch.Tensor: Square error over all dimensions for each point.
+            - torch.Tensor: Absolute error for each point.
+            - torch.Tensor: Square error over all dimensions averaged over each
+                Lyapunov time.
+            - torch.Tensor: Absolute error over all dimensions averaged over 
+                each Lyapunov time.
+            - torch.Tensor: Predictions on test data.
+            - torch.Tensor: Test data.
+            - torch.Tensor: Timing data (train time, generation+train time, 
+                generation+train+test time)
+        """
         if self.y_train is None:
             y_full = self.generate_data(self.source or source)
             y_train, y_test, y_mean, y_std = self.split_train_test(y_full)
@@ -256,7 +407,33 @@ class SweepESN(Sweep):
 
         return mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled, dt
         
-    def run_ensemble(self, esn_kwargs, return_timing=False):
+    def run_ensemble(self, esn_kwargs: dict, return_timing: bool = False) -> tuple:
+        """Fit an ensemble of ESNs.
+
+        Args:
+            esn_kwargs (dict, optional): Constant arguments to ESN initialiser.
+            return_timing (bool, optional): Return timing data. Defaults to 
+                False.
+
+        Returns:
+            tuple containing:
+            - torch.Tensor: Average mean squared error over first 
+                self.n_test_err points for each ESN
+            - torch.Tensor: Average mean absolute error over first
+                self.n_test_err points for each ESN.
+            - torch.Tensor: Square error over all dimensions averaged over each
+                Lyapunov time for each ESN.
+            - torch.Tensor: Absolute error over all dimensions averaged over 
+                each Lyapunov time for each ESN.
+            - str: Path to a Plotly figure json showing performance on test 
+                data. Will be generated in a temporary folder.
+            - list: If return_timing is True, list of timing data for each ESN.
+            
+        if return_timing:
+            return mae, mse, mae_lyap, mse_lyap, fig_path, timing
+        else:
+            return mae, mse, mae_lyap, mse_lyap, fig_path
+        """
         y_esn_list = []
         y_test_list = []
         abs_err_list = []
@@ -313,8 +490,27 @@ class SweepESN(Sweep):
         else:
             return mae, mse, mae_lyap, mse_lyap, fig_path
 
-    def plot_ensemble(self, y_esn_list, y_test_list, abs_err_list, sq_err_list, source=None):
+    def plot_ensemble(
+        self, 
+        y_esn_list: list[torch.Tensor], 
+        y_test_list: list[torch.Tensor], 
+        abs_err_list: list[torch.Tensor], 
+        sq_err_list: list[torch.Tensor], 
+        source: Optional[str] = None,
+    ) -> go.Figure:
+        """Plot results of an ESN ensemble.
 
+        Args:
+            y_esn_list (list[torch.Tensor]): List of ESN predictions.
+            y_test_list (list[torch.Tensor]): List of test data.
+            abs_err_list (list[torch.Tensor]): List of absolute errors.
+            sq_err_list (list[torch.Tensor]): List of squared errors.
+            source (Optional[str], optional): ODE source name. If None, use
+                self.source. Defaults to None.
+
+        Returns:
+            go.Figure: Plotly figure.
+        """
         source = self.source or source
         res = self.get_resolution(source)
         t_lyap = T_LYAPUNOV.get(source)
@@ -587,6 +783,8 @@ class SweepESN(Sweep):
 
 
 class SweepEnKF(Sweep):
+    """AD-EnKF sweep."""
+
     def __init__(
         self,
         source: str,
@@ -601,12 +799,31 @@ class SweepEnKF(Sweep):
         continuous_colour: bool = True,
         **kwargs
     ):
+        """Initialise.
 
+        Args:
+            source (str): ODE source name.
+            sweep_name (str): Name of single parameter to sweep.
+            sweep_vals (Iterable): Values for swept parameter.
+            enkf_kwargs (dict, optional): kwargs to pass to AD_EnKF 
+                initialiser. Defaults to {}.
+            train_kwargs (dict, optional): kwargs to pass to AD_EnKF.train. 
+                Defaults to {}.
+            hidden_layers (list[int], optional): Size of hidden RNN layers. 
+                Defaults to [6, 10, 6].
+            train_sweep (bool, optional): Add swept parameter to train_kwargs.
+                Otherwise, add to enkf_kwargs. Defaults to True.
+            notebook_display (bool, optional): When running in a notebook 
+                context, show a live updating figure. Defaults to True.
+            additional_states (int, optional): Number of latent states to use.
+                Defaults to 0.
+            continuous_colour (bool, optional): Use a different colour for 
+                each EnKF in the plot. Otherwise, use same colours for networks
+                with same hyperparameters. Defaults to True.
+        """
         super().__init__(source=source, **kwargs)
         self.sweep_name = sweep_name
         self.sweep_vals = sweep_vals
-        self.enkf_kwargs = enkf_kwargs
-        self.train_kwargs = train_kwargs
         self.hidden_layers = hidden_layers
         self.train_sweep = train_sweep
         self.notebook_display = notebook_display
@@ -654,14 +871,30 @@ class SweepEnKF(Sweep):
             )
             display(self.train_fig)
 
-    def next_kf_to_train(self, i_kfs=None):
+    def next_kf_to_train(self, i_kfs: Optional[list[int]] = None) -> int:
+        """Find next AD_EnKF to train, based on minimum number of epochs.
+
+        Args:
+            i_kfs (list[int], optional): List of AD_EnKF indices to select 
+                from. If None, use all. Defaults to None.
+
+        Returns:
+            int: Index of AD_EnKF with lowest number of epochs.
+        """
         if i_kfs is None:
             return np.argmin([kf._epoch for kf in self.kfs])
         else:
             i_train = np.argmin([kf._epoch for i, kf in enumerate(self.kfs) if i in i_kfs])
             return i_kfs[i_train]
 
-    def train(self, to_epochs, i_kfs=None):
+    def train(self, to_epochs: int, i_kfs: Optional[list[int]] = None):
+        """Train AD_EnKFs up to a set number of epochs.
+
+        Args:
+            to_epochs (int): Maximum number of epochs to train to.
+            i_kfs (list[int], optional): List of AD_EnKF indices to select 
+                from. If None, use all. Defaults to None.
+        """
         while True:
             i = self.next_kf_to_train(i_kfs)
             if self.kfs[i]._epoch >= to_epochs:
@@ -677,7 +910,23 @@ class SweepEnKF(Sweep):
             )
 
     @staticmethod
-    def combine_figs(kfs, names, continuous_colour=True):
+    def combine_figs(
+        kfs: list[kalman.AD_EnKF], 
+        names: list[str], 
+        continuous_colour: bool = True,
+    ) -> go.FigureWidget:
+        """Utility function to combine training figures from multiple AD_EnKFs.
+
+        Args:
+            kfs (list[kalman.AD_EnKF]): List of AD_EnKFs
+            names (list[str]): List of display names.
+            continuous_colour (bool, optional): Use a different colour for 
+                each EnKF in the plot. Otherwise, use same colours for networks
+                with same hyperparameters. Defaults to True.
+
+        Returns:
+            go.FigureWidget: Combined plot.
+        """
         fig = go.FigureWidget(
             subplots.make_subplots(rows=3, cols=1, shared_xaxes=True))
         if continuous_colour:
@@ -701,8 +950,17 @@ class SweepEnKF(Sweep):
 
         return fig
 
-    def plot_test(self, i, show_ensemble=True):
+    def plot_test(self, i: int, show_ensemble: bool = True) -> go.Figure:
+        """Generate plot of AD_EnKF test performance.
 
+        Args:
+            i (int): Index of AD_EnKF to test.
+            show_ensemble (bool, optional): Show trajectory of all particles. 
+                Defaults to True.
+
+        Returns:
+            go.Figure: Plot of test performance.
+        """
         kf = self.kfs[i]
 
         with torch.no_grad():
@@ -980,7 +1238,15 @@ class SweepEnKF(Sweep):
 
         return fig
 
-    def prepare_enkf(self, kwargs):
+    def prepare_enkf(self, kwargs: dict) -> kalman.AD_EnKF:
+        """Generate an AD_EnKF with the parameterised arguments.
+
+        Args:
+            kwargs (dict): Extra rguments for AD_EnKF.__init__.
+
+        Returns:
+            kalman.AD_EnKF: Initialised AD_EnKF. 
+        """
         return prepare_enkf(
             self.n_outputs, 
             self.resolution, 
@@ -990,7 +1256,25 @@ class SweepEnKF(Sweep):
             **kwargs,
         )
     
-    def enkf_err(self, i):
+    def enkf_err(self, i: int) -> tuple:
+        """Calcualte test error on an AD_EnKF.
+
+        Args:
+            i (int): Index of AD_EnKF.
+
+        Returns:
+            tuple containing:
+            - torch.Tensor: Average mean squared error over first 
+                self.n_test_err points
+            - torch.Tensor: Average mean absolute error over first
+                self.n_test_err points
+            - torch.Tensor: Square error over all dimensions for each point.
+            - torch.Tensor: Absolute error for each point.
+            - torch.Tensor: Square error over all dimensions averaged over each
+                Lyapunov time.
+            - torch.Tensor: Absolute error over all dimensions averaged over 
+                each Lyapunov time.
+        """
         kf = self.kfs[i]
         ll, x = kf.log_likelihood(self.y_train, dt=1/self.resolution)
         x_0 = x[-1, :, :].mean(axis=0)
@@ -999,16 +1283,32 @@ class SweepEnKF(Sweep):
 
 
 def prepare_enkf(
-    n_outputs, 
-    resolution, 
-    noise, 
-    hidden_layers, 
-    n_particles=20, 
-    additional_states=0, 
-    activation_function='relu', 
+    n_outputs: int, 
+    resolution: int, 
+    noise: float, 
+    hidden_layers: list[int], 
+    n_particles: int = 20, 
+    additional_states: int = 0, 
+    activation_function: str = 'ReLU', 
     **kwargs
-):
-    
+) -> kalman.AD_EnKF:
+    """Generate an AD_EnKF with the parameterised arguments.
+
+    Args:
+        n_outputs (int): Number of outputs
+        resolution (int): Resolution of data
+        noise (float): Noise level of data
+        hidden_layers (list[int]): Number of hidden layers of RNN.
+        n_particles (int, optional): Number of AD-EnKF particles. Defaults to 
+            20.
+        additional_states (int, optional): Number of latent states. Defaults to
+            0.
+        activation_function (str, optional): Either ReLU, ELU or Tanh. Defaults
+            to 'relu'.
+
+    Returns:
+        kalman.AD_EnKF: Initialised AD_EnKF. 
+    """
     n_states = n_outputs + additional_states
 
     activation_functions = {

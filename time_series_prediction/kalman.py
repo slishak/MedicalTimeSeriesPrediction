@@ -13,12 +13,13 @@ from time_series_prediction import settings
 
 
 class NoiseModel(nn.Module):
-    """Base class for noise generation models"""
+    """Base class for noise generation models."""
+
     ...
 
 
 class ScalarNoise(NoiseModel):
-    """Scalar Gaussian noise with a parameterised standard deviation
+    """Scalar Gaussian noise with a parameterised standard deviation.
 
     Internally represents the parameter with an inverse softplus transform
     such that it is forced to be positive.
@@ -26,8 +27,9 @@ class ScalarNoise(NoiseModel):
     For a more complete implementation, see:
     https://github.com/ymchen0/torchEnKF/blob/master/torchEnKF/noise.py
     """
+
     def __init__(self, param: torch.Tensor, dim: int):
-        """Initialise
+        """Initialise.
 
         Args:
             param (torch.Tensor): Standard deviation of Gaussian noise
@@ -40,7 +42,7 @@ class ScalarNoise(NoiseModel):
         self.dim = dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply noise to a tensor
+        """Apply noise to a tensor.
 
         Args:
             x (torch.Tensor): Tensor (one axis should have length self.dim)
@@ -62,7 +64,7 @@ class ScalarNoise(NoiseModel):
 
     @staticmethod
     def _softplus(t: torch.Tensor) -> torch.Tensor:
-        """Softplus transformation:
+        """Softplus transformation.
 
         y = log(1 + e^t)
 
@@ -76,7 +78,7 @@ class ScalarNoise(NoiseModel):
 
     @staticmethod
     def _softplus_inv(t: torch.Tensor) -> torch.Tensor:
-        """Inverse softplus transformation:
+        """Inverse softplus transformation.
 
         y = log(e^t - 1)
 
@@ -90,13 +92,26 @@ class ScalarNoise(NoiseModel):
 
 
 class ScaledDiagonalNoise(ScalarNoise):
+    """Gaussian noise with a parameterised standard deviation for each 
+    dimension.
+
+    Internally represents the parameter with an inverse softplus transform
+    such that it is forced to be positive.
+    """
+
     def __init__(self, param: torch.Tensor, scales: torch.Tensor):
+        """Initialise.
+
+        Args:
+            param (torch.Tensor): Standard deviation of Gaussian noise
+            scales (torch.Tensor): Standard deviation for each dimension.
+        """
         dim = len(scales)
         super().__init__(param, dim)
         self.scales = scales
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply noise to a tensor
+        """Apply noise to a tensor.
 
         Args:
             x (torch.Tensor): Tensor (one axis should have length self.dim)
@@ -118,7 +133,8 @@ class ScaledDiagonalNoise(ScalarNoise):
 
 
 class AD_EnKF:
-    """Auto-Differentiable Ensemble Kalman Filter (AD-EnKF)"""
+    """Auto-Differentiable Ensemble Kalman Filter (AD-EnKF)."""
+
     def __init__(
         self,
         transition_function: nn.Module,
@@ -160,7 +176,6 @@ class AD_EnKF:
             adjoint (bool, optional): Use adjoint solver with neural ODE. 
                 Defaults to False.
         """
-
         self.transition_function = transition_function
         self.observation_matrix = observation_matrix
         self.observation_noise = observation_noise
@@ -186,12 +201,11 @@ class AD_EnKF:
 
     def taper_rho(self) -> torch.Tensor:
         """Covariance tapering matrix - defined in equation SM4.3 of AD-EnKF 
-        paper. Also see Gaspari and Cohn, 1999
+        paper. Also see Gaspari and Cohn, 1999.
 
         Returns: 
             torch.Tensor: Tapering matrix
         """
-
         def f1(x):
             return (
                 1 
@@ -232,7 +246,8 @@ class AD_EnKF:
         dt: Optional[float] = None,
         t_0: float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute log likelihood of the current model generating the observations
+        """Compute log likelihood of the current model generating the 
+        observations.
 
         Args:
             obs (torch.Tensor): Observations to compute log likelihood of, 
@@ -250,7 +265,6 @@ class AD_EnKF:
             - torch.Tensor: Estimated states, with shape 
                 [n_steps, self.n_particles, self.n_states]
         """
-
         n_steps = obs.shape[0]
         x = []
         ll = 0
@@ -391,7 +405,6 @@ class AD_EnKF:
                 for each parameter depending on its initial magnitude. Defaults
                 to False.
         """
-
         if self._opt is None:
 
             def lr_lambda(epoch):
@@ -588,7 +601,6 @@ class AD_EnKF:
             - torch.Tensor: AD-EnKF states
             - torch.Tensor: AD-EnKF outputs
         """
-
         if self.neural_ode:
             if dt is None:
                 raise Exception('Must set dt if using neural ODE')
@@ -622,7 +634,8 @@ class AD_EnKF:
 
 
 class NeuralNet(nn.Module):
-    """Simple neural network"""
+    """Simple neural network."""
+
     def __init__(
         self, 
         input_dim: int, 
@@ -630,7 +643,7 @@ class NeuralNet(nn.Module):
         hidden_dims: list[int], 
         activation_function: Type[nn.Module] = nn.ReLU,
     ):
-        """Initialise
+        """Initialise.
 
         Args:
             input_dim (int): Dimension of NN input
@@ -663,7 +676,8 @@ class NeuralNet(nn.Module):
 
 
 class ResNet(NeuralNet):
-    """Residual neural network"""
+    """Residual neural network."""
+
     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """Perform forward pass through neural network.
 
@@ -679,12 +693,14 @@ class ResNet(NeuralNet):
 
 
 class EulerStepNet(NeuralNet):
-    """Euler step network. Half-way between a ResNet and a Neural ODE, just
-    multiply the residual by a timestep such that the network approximately
-    learns the derivative.
+    """Euler step network.
+    
+    Half-way between a ResNet and a Neural ODE, just multiply the residual by a
+    timestep such that the network approximately learns the derivative.
     """
+
     def __init__(self, *args, dt: float = 0.1, **kwargs):
-        """Initialise
+        """Initialise.
 
         Args:
             dt (float, optional): Fixed timestep. Defaults to 0.1.
@@ -702,6 +718,5 @@ class EulerStepNet(NeuralNet):
         Returns:
             torch.Tensor: Next state
         """
-
         y = super().forward(t, x)
         return x + y * self.dt

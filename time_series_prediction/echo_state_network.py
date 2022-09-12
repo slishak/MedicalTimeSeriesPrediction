@@ -6,7 +6,8 @@ from time_series_prediction import settings
 
 
 class ESN:
-    """Echo state network"""
+    """Echo state network."""
+
     def __init__(
         self,
         w_in: float = 1, 
@@ -51,8 +52,13 @@ class ESN:
         self._generate()
 
     def _generate(self, simple_scaling=False):
-        """Generate reservoir matrices/vectors based on the given parameters"""
-        
+        """Generate reservoir matrices/vectors based on the given parameters.
+
+        Args:
+            simple_scaling (bool, optional): Use standard spectral radius 
+                scaling method. Otherwise, use Schur stability method. Defaults
+                to False.
+        """
         # For now, saple input/output/backprop layers from same distribution
         layer_weight_dist = torch.distributions.Uniform(-self.w_in, self.w_in)
         self.input_weights = layer_weight_dist.sample(
@@ -97,7 +103,6 @@ class ESN:
             - torch.Tensor: next state
             - torch.Tensor: next (predicted) output
         """
-
         if self.bias:
             inp = torch.cat([torch.tensor([1.0], device=settings.device), inp])
 
@@ -117,7 +122,7 @@ class ESN:
         y_0: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the forwards function repeatedly and output a sequence of states
-        and outputs
+        and outputs.
 
         Args:
             u (torch.Tensor): Inputs to model. If the model has no inputs 
@@ -173,7 +178,6 @@ class ESN:
             torch.Tensor: Reservoir states driven by the inputs and outputs, of
                 shape [n, self.n_neurons]
         """
-        
         n_steps = outputs.shape[0]
 
         # Initialise with zeros

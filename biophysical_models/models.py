@@ -25,11 +25,14 @@ from biophysical_models.misc import newton_raphson
 
 
 class PassiveRespiratorySystem(ODEBase):
-    """Passive mechanical respiratory system. Note that this model cannot be 
-    simulated in isolation as it requires additional states from the 
-    respiratory pattern generator and the cardiovascular model.
+    """Passive mechanical respiratory system.
     
-    (Jallon, 2009)"""
+    Note that this model cannot be simulated in isolation as it requires 
+    additional states from the respiratory pattern generator and the 
+    cardiovascular model.
+    
+    (Jallon, 2009)
+    """
 
     def __init__(
         self, 
@@ -39,7 +42,7 @@ class PassiveRespiratorySystem(ODEBase):
         r_ca: float = convert(1, 'cmH2O s/l'),
         v_th0: float = convert(2, 'l'),
     ):
-        """Initialise
+        """Initialise.
 
         Args:
             e_alv (float, optional): Alveolar elastance. Defaults to 5 cmH2O/l
@@ -64,7 +67,7 @@ class PassiveRespiratorySystem(ODEBase):
         t: torch.Tensor, 
         states: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """Passive respiratory model implementation
+        """Passive respiratory model implementation.
 
         Args:
             t (torch.Tensor): Time (s)
@@ -73,7 +76,6 @@ class PassiveRespiratorySystem(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Model outputs
         """
-
         # These are not states of this model, but states of the overall system
         v_pcd = states['v_lv'] + states['v_rv']
         v_pu = states['v_pu']
@@ -103,7 +105,6 @@ class PassiveRespiratorySystem(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
         """
-
         # Jallon 2009, Table 1:
         return {
             'v_alv': torch.tensor(convert(0.5, 'l'), device=device),
@@ -111,9 +112,10 @@ class PassiveRespiratorySystem(ODEBase):
 
 
 class SmithCardioVascularSystem(ODEBase):
-    """Smith CVS model with no inertia and Heaviside valve law
+    """Smith CVS model with no inertia and Heaviside valve law.
     
-    (Smith, 2004) and (Hann, 2004)"""
+    (Smith, 2004) and (Hann, 2004)
+    """
 
     def __init__(
         self, 
@@ -138,7 +140,6 @@ class SmithCardioVascularSystem(ODEBase):
             v_spt_method (str, optional): either 'xitorch', 'newton' or 
                 'jallon'. Defaults to 'xitorch'.
         """
-
         super().__init__(state_names=['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv'])
 
         self._p_pl_is_input = p_pl_is_input
@@ -247,7 +248,7 @@ class SmithCardioVascularSystem(ODEBase):
         states: dict[str, torch.Tensor],
         p_pl: Optional[torch.Tensor] = None,
     ) -> dict[str, torch.Tensor]:
-        """Model implementation
+        """Model implementation.
 
         Args:
             t (torch.Tensor): Time (s)
@@ -258,7 +259,6 @@ class SmithCardioVascularSystem(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Model outputs
         """
-
         # t1 = perf_counter()
 
         if self._p_pl_is_input:
@@ -298,7 +298,6 @@ class SmithCardioVascularSystem(ODEBase):
             outputs (dict[str, torch.Tensor]): Partial model outputs containing
                 flow rates
         """
-
         if self.volume_ratios:
             deriv_scale = self.v_tot
         else:
@@ -335,7 +334,6 @@ class SmithCardioVascularSystem(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Pressure/volume outputs
         """
-
         if self.volume_ratios:
             states = {
                 key: val * self.v_tot if key in self.state_names[:5] else val
@@ -455,7 +453,6 @@ class SmithCardioVascularSystem(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
         """
-
         r_vc = 1 - r_pa - r_pu - r_lv - r_ao - r_rv
 
         assert r_vc > 0, "Initial v_vc must not be negative"
@@ -494,8 +491,6 @@ class SmithCardioVascularSystem(ODEBase):
     ) -> torch.Tensor:
         """Find value for v_spt using root finding algorithm.
 
-        TODO: Remove all algorithms other than Newton-Raphson.
-
         Args:
             v_lv (torch.Tensor): Left ventricle volume
             v_rv (torch.Tensor): Right ventricle volume
@@ -506,7 +501,6 @@ class SmithCardioVascularSystem(ODEBase):
         Returns:
             torch.Tensor: v_spt solution
         """
-
         # No explicit solution for v_spt, need to use root finder
         if self._v_spt_method == 'xitorch':
             v_spt = rootfinder(
@@ -580,7 +574,6 @@ class SmithCardioVascularSystem(ODEBase):
             - grad (torch.Tensor): Gradient of residual wrt v_spt
                 (only if return_grad)
         """
-
         # Free wall volumes v_(lvf/rvf/spt) are not physical volumes, but 
         # defined to capture deflection of cardiac free walls relative to 
         # ventricle volumes
@@ -601,9 +594,10 @@ class SmithCardioVascularSystem(ODEBase):
 
 
 class InertialSmithCVS(SmithCardioVascularSystem):
-    """Smith CVS model with inertia and Heaviside valve law
+    """Smith CVS model with inertia and Heaviside valve law.
     
-    (Smith, 2004), (Hann, 2004) and (Paeme, 2011)"""
+    (Smith, 2004), (Hann, 2004) and (Paeme, 2011)
+    """
     
     def __init__(self):
         """Initialise.
@@ -652,7 +646,7 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         states: dict[str, torch.Tensor],
         p_pl: Optional[torch.Tensor] = None,
     ) -> dict[str, torch.Tensor]:
-        """Model implementation
+        """Model implementation.
 
         Args:
             t (torch.Tensor): Time (s)
@@ -663,7 +657,6 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         Returns:
             dict[str, torch.Tensor]: Model outputs
         """
-
         outputs = self.pressures_volumes(t, states, p_pl)
         self.flow_rates(outputs)
         outputs['q_mt'] = torch.clamp(states['q_mt'], min=0.0)
@@ -726,7 +719,6 @@ class InertialSmithCVS(SmithCardioVascularSystem):
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
         """
-
         states = super().init_states(
             r_pa=r_pa,
             r_pu=r_pu,
@@ -751,13 +743,14 @@ class JallonHeartLungs(ODEBase):
     """Jallon model of heart and lungs (combined cardiovascular and 
     respiratory model). Uses simple valve law with no inertia.
     
-    (Jallon, 2009)"""
+    (Jallon, 2009)
+    """
 
     def __init__(
         self, 
         f_hr: Optional[Callable] = None, 
     ):
-        """Initialise. 
+        """Initialise.
 
         Args:
             f_hr (Callable, optional): Heart rate as a function of time. 
@@ -769,7 +762,6 @@ class JallonHeartLungs(ODEBase):
         Default parameters from Smith (2007) with modifications from 
         Jallon (2009)
         """
-
         state_names = (
             SmithCardioVascularSystem.state_names + 
             PassiveRespiratorySystem.state_names + 
@@ -792,8 +784,9 @@ class JallonHeartLungs(ODEBase):
             self.cvs.p_pl_affects_pu_and_pa.copy_(torch.tensor(True))
 
     def callback_accept_step(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor):
-        """Called by torchdiffeq at the end of a successful step. Used to 
-        build outputs (irregularly-spaced grid) in self.trajectory.
+        """Called by torchdiffeq at the end of a successful step. 
+        
+        Used to build outputs (irregularly-spaced grid) in self.trajectory.
 
         Stores last value of v_spt for use as initial guess in next step.
 
@@ -806,9 +799,10 @@ class JallonHeartLungs(ODEBase):
         self.cvs._v_spt_old = self.trajectory[-1][3]['v_spt']
 
     def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Model implementation. Just consists of calling the lower-level 
-        models and passing parameters between. See Figure 5 from Jallon (2009)
-        for schematic.
+        """Model implementation. 
+        
+        Just consists of calling the lower-level models and passing parameters
+        between. See Figure 5 from Jallon (2009) for schematic.
 
         Args:
             t (torch.Tensor): Time (s)
@@ -817,7 +811,6 @@ class JallonHeartLungs(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Model outputs
         """
-
         # Run respiratory model
         resp_outputs = self.resp.model(t, states)
         # Run cardiovascular model
@@ -838,7 +831,6 @@ class JallonHeartLungs(ODEBase):
         Returns:
             dict[str, torch.Tensor]: Initial ODE states
         """
-
         cvs_states = self.cvs.init_states(
             r_pa=0.034,
             r_pu=0.145,
@@ -856,10 +848,18 @@ class JallonHeartLungs(ODEBase):
 
 
 def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
+    """Add blood pressure metrics model to a cardiovascular ODE model.
 
+    Args:
+        cls (Type[ODEBase]): Class definition of cardiovascular model
+
+    Returns:
+        Type[ODEBase]: New model with extra states for blood pressure metrics.
+    """
     class BloodPressureMetrics(cls):
 
         def __init__(self, *args, **kwargs):
+            """Initialise cls and add new states and parameters."""
             assert kwargs.get('f_hr') is not None, "Must use dynamic HR for BP metrics"
             super().__init__(*args, **kwargs)
 
@@ -880,6 +880,15 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
             t: torch.Tensor, 
             states: dict[str, torch.Tensor],
         ) -> dict[str, torch.Tensor]:
+            """Call model, and then update blood pressure metric states.
+
+            Args:
+                t (torch.Tensor): Time (s)
+                states (torch.Tensor): Model states
+
+            Returns:
+                dict[str, torch.Tensor]: Model outputs
+            """
             outputs = super().model(t, states)
 
             # Moving averages
@@ -930,6 +939,14 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
             return outputs
 
         def init_states(self, device='cpu') -> dict[str, torch.Tensor]:
+            """Return initial values of ODE states.
+
+            Args:
+                device (str, optional): PyTorch device. Defaults to 'cpu'.
+
+            Returns:
+                dict[str, torch.Tensor]: Initial ODE states
+            """
             init_states = super().init_states(device=device)
             init_outputs = super().model(torch.tensor(0., device=device), init_states)
             init_states['p_aom'] = init_outputs['p_ao']
