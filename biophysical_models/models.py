@@ -1,7 +1,6 @@
 from time import perf_counter
 import warnings
-from dataclasses import dataclass
-from typing import ClassVar, Union, Optional, Callable, Type
+from typing import Optional, Callable, Type
 
 import torch
 from torch import nn
@@ -26,15 +25,12 @@ from biophysical_models.misc import newton_raphson
 # pd.options.plotting.backend = 'plotly'
 
 
-@dataclass
 class PassiveRespiratorySystem(ODEBase):
     """Passive mechanical respiratory system. Note that this model cannot be 
     simulated in isolation as it requires additional states from the 
     respiratory pattern generator and the cardiovascular model.
     
     (Jallon, 2009)"""
-
-    state_names: ClassVar[list[str]] = ['v_alv']
 
     def __init__(
         self, 
@@ -57,7 +53,7 @@ class PassiveRespiratorySystem(ODEBase):
                 pressure. Defaults to 2 l. Note: Jallon gives incorrect units 
                 of 1/l.
         """
-        super().__init__()
+        super().__init__(state_names=['v_alv'])
         self.e_alv = nn.Parameter(torch.as_tensor(e_alv))
         self.e_cw = nn.Parameter(torch.as_tensor(e_cw))
         self.r_ua = nn.Parameter(torch.as_tensor(r_ua))
@@ -114,23 +110,20 @@ class PassiveRespiratorySystem(ODEBase):
             'v_alv': torch.tensor(convert(0.5, 'l'), device=device),
         }
 
+
 class SmithCardioVascularSystem(ODEBase):
     """Smith CVS model with no inertia and Heaviside valve law
     
     (Smith, 2004) and (Hann, 2004)"""
 
-    state_names: ClassVar[list[str]] = ['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv']
-
     def __init__(
         self, 
-        *args, 
         p_pl_is_input: bool = False, 
         f_hr: Optional[Callable] = None, 
         volume_ratios: bool = False,
         v_spt_method: str = 'xitorch',
-        **kwargs,
     ):
-        """Initialise. All parameters passed to nn.Module. 
+        """Initialise.
 
         Default parameter values from Smith, 2005.
 
@@ -147,14 +140,23 @@ class SmithCardioVascularSystem(ODEBase):
                 'jallon'. Defaults to 'xitorch'.
         """
 
-        super().__init__(*args, **kwargs)
+        super().__init__(state_names=['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv'])
 
         self._p_pl_is_input = p_pl_is_input
         self.volume_ratios = volume_ratios
 
         if self.volume_ratios:
             # Calculate v_vc from other states
-            self.state_names = [state for state in self.state_names if state != 'v_vc']
+            self.state_names.remove('v_vc')
+
+        # Cardiac pattern generator
+        if f_hr is None:
+            self.e = CardiacDriver(hr=80.0)
+            self.dynamic_hr = False
+        else:
+            self.e = DynamicCardiacDriver(hr=f_hr)
+            self.dynamic_hr = True
+            self.state_names.extend(self.e.state_names)
 
         # Valves
         self.mt = Valve(convert(0.06, 'kPa s/l'))  # Mitral valve
@@ -188,15 +190,6 @@ class SmithCardioVascularSystem(ODEBase):
         # Aorta
         self.ao = PressureVolume(convert(94, 'kPa/l'), convert(0.8, 'l'), None, None, None)
     
-        # Cardiac pattern generator
-        if f_hr is None:
-            self.e = CardiacDriver(hr=80.0)
-            self.dynamic_hr = False
-        else:
-            self.e = DynamicCardiacDriver(hr=f_hr)
-            self.dynamic_hr = True
-            self.state_names = self.state_names + self.e.state_names
-
         # Total blood volume
         self.v_tot = nn.Parameter(torch.tensor(convert(5.5, 'l')))
 
@@ -589,17 +582,15 @@ class InertialSmithCVS(SmithCardioVascularSystem):
     
     (Smith, 2004), (Hann, 2004) and (Paeme, 2011)"""
     
-    state_names: ClassVar[list[str]] = [
-        'v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv', 
-        'q_mt', 'q_av', 'q_tc', 'q_pv',
-    ]
-
-    def __init__(self, *args, **kwargs):
-        """Initialise. All parameters passed to nn.Module. 
+    def __init__(self):
+        """Initialise.
 
         Default parameter values from Paeme, 2011.
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(state_names=[
+            'v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv', 
+            'q_mt', 'q_av', 'q_tc', 'q_pv',
+        ])
         # Mitral valve
         self.mt = InertialValve(convert(0.0158, 'mmHg s/ml'), convert(7.6967e-5, 'mmHg s^2/ml'))
         # Tricuspid valve
@@ -735,17 +726,9 @@ class JallonHeartLungs(ODEBase):
     
     (Jallon, 2009)"""
 
-    state_names: ClassVar[list[str]] = (
-        SmithCardioVascularSystem.state_names + 
-        PassiveRespiratorySystem.state_names + 
-        RespiratoryPatternGenerator.state_names
-    )
-
     def __init__(
         self, 
-        *args, 
         f_hr: Optional[Callable] = None, 
-        **kwargs,
     ):
         """Initialise. 
 
@@ -760,16 +743,15 @@ class JallonHeartLungs(ODEBase):
         Jallon (2009)
         """
 
-        super().__init__(*args, **kwargs)
+        state_names = (
+            SmithCardioVascularSystem.state_names + 
+            PassiveRespiratorySystem.state_names + 
+            RespiratoryPatternGenerator.state_names
+        )
+        super().__init__(state_names=state_names)
         self.resp_pattern = RespiratoryPatternGenerator()
         self.resp = PassiveRespiratorySystem()
         self.cvs = SmithCardioVascularSystem(p_pl_is_input=True, f_hr=f_hr, v_spt_method='jallon')
-
-        self.state_names = (
-            self.resp_pattern.state_names + 
-            self.resp.state_names + 
-            self.cvs.state_names
-        )
 
         # Jallon CVS model modifications
         with torch.no_grad():

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar, Optional, Callable
+from typing import Optional, Callable
 
 import torch
 from torch import nn
@@ -10,23 +10,25 @@ from biophysical_models.unit_conversions import convert
 
 class ODEBase(ABC, nn.Module):
 
-    # TODO: This should be set in __init__ as it's no longer static
-    state_names: ClassVar[list[str]]
-
     """Base class for ODE problems.
     
     state_names must be set in the child class definition: a list of strings
     to denote state names
     """
 
-    def __init__(self, *args, verbose=True, save_traj=True, **kwargs):
+    def __init__(self, state_names: list[str], verbose: bool = True, save_traj: bool = True):
         """Initialises nn.Module
 
         Args:
+            state_names (list[str]): list of state names.
             verbose (bool, optional): Print integration progress after every
                 accepted step. Defaults to True.
+            save_traj (bool, optional): Save trajectory (list of tuples of
+                time, states, outputs, derivatives for every accepted step)
+                to self.trajectory. No gradients saved. Defaults to True.
         """
-        super().__init__(*args, **kwargs)
+        super().__init__()
+        self.state_names = state_names
         self.save_traj = save_traj
         if self.save_traj:
             self.trajectory = []
@@ -98,9 +100,9 @@ class ODEBase(ABC, nn.Module):
 
     @abstractmethod
     def model(self, t: torch.Tensor, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """To be implemented in subclass. Implementation of ODE model. 
+        """To be implemented in subclass. Implementation of ODE model.
         Should output a dict of tensors, at least containing a "d{state}_dt"
-        key for every state in 
+        key for every state.
 
         Args:
             t (torch.Tensor): Time (s)
@@ -484,8 +486,6 @@ class CardiacDriver(nn.Module):
 
 class DynamicCardiacDriver(ODEBase):
 
-    state_names : ClassVar[list[str]] = ['s']
-        
     def __init__(
         self, 
         a: float = 1.0, 
@@ -501,7 +501,7 @@ class DynamicCardiacDriver(ODEBase):
             hr (Callable, optional): Heart rate as a function of time 
                 (bpm). Defaults to hr(t) = 80.
         """
-        super().__init__()
+        super().__init__(state_names=['s'])
         self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
         self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
         self.f_hr = hr
@@ -557,8 +557,6 @@ class RespiratoryPatternGenerator(ODEBase):
     
     (Jallon, 2009)"""
 
-    state_names: ClassVar[list[str]] = ['x', 'y', 'p_mus']
-
     def __init__(
         self, 
         hb: float = convert(1.0, '1/l'),  # Jallon: units not given, assumed 1/l
@@ -592,7 +590,7 @@ class RespiratoryPatternGenerator(ODEBase):
                 pressure to keep it at constant mean (prevents drift). 
                 Modification original in this work. Defaults to 0.1/s
         """
-        super().__init__()
+        super().__init__(state_names=['x', 'y', 'p_mus'])
         self.hb = nn.Parameter(torch.as_tensor(hb))
         self.a = nn.Parameter(torch.as_tensor(a), requires_grad=False)
         self.b = nn.Parameter(torch.as_tensor(b), requires_grad=False)
