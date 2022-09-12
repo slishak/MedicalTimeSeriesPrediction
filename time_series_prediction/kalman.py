@@ -195,21 +195,21 @@ class AD_EnKF:
         def f1(x):
             return (
                 1 
-                - (5/3) * x**2
-                + (5/8) * x**3
-                + (1/2) * x**4
-                - (1/4) * x**5
+                - (5/3) * x**2  # noqa: W503
+                + (5/8) * x**3  # noqa: W503
+                + (1/2) * x**4  # noqa: W503
+                - (1/4) * x**5  # noqa: W503
             )
 
         def f2(x):
             return (
                 4 
-                - 5 * x
-                + (5/3) * x**2
-                + (5/8) * x**3
-                - (1/2) * x**4
-                + (1/12) * x**5
-                - 2/(3*x)
+                - 5 * x  # noqa: W503
+                + (5/3) * x**2  # noqa: W503
+                + (5/8) * x**3  # noqa: W503
+                - (1/2) * x**4  # noqa: W503
+                + (1/12) * x**5  # noqa: W503
+                - 2/(3*x)  # noqa: W503
             )
 
         if self.taper_radius is None:
@@ -411,7 +411,7 @@ class AD_EnKF:
                 opt_params = [{'params': alpha, 'lr': lr_alpha}]
             opt_params.append({'params': beta, 'lr': lr_beta})
             self._opt = torch.optim.Adam(opt_params)
-            # From https://github.com/ymchen0/torchEnKF/blob/016b4f8412310c195671c81790d372bd6cd9dc95/examples/l96_NN_demo.py
+            # From https://github.com/ymchen0/torchEnKF/blob/master/examples/l96_NN_demo.py
             self._scheduler = torch.optim.lr_scheduler.LambdaLR(
                 self._opt, lr_lambda=[lr_lambda] * len(opt_params))
             self._epoch = 0

@@ -270,7 +270,7 @@ class SweepESN(Sweep):
         for i in range(self.n_ensemble):
             # print(f'{i+1}/{self.n_ensemble}')
 
-            mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled, dt = self.train_esn(
+            mse, mae, sq_err, abs_err, mse_lyap, mae_lyap, y_esn_unscaled, y_test_unscaled, dt = self.train_esn(  # noqa: 273
                 **esn_kwargs
             )
 
@@ -503,7 +503,7 @@ class SweepESN(Sweep):
                     # line_dash='dash',
                     name='System data',
                     legendgroup='Test',
-                    showlegend=i==0,
+                    showlegend=i == 0,
                 )
 
                 fig.add_scatter(
@@ -524,7 +524,7 @@ class SweepESN(Sweep):
                     row=i+1, 
                     col=1, 
                     line_color='red', 
-                    showlegend=i==0, 
+                    showlegend=i == 0, 
                     opacity=0.9, 
                     legendgroup='esn-fill', 
                     name='Ensemble mean ±σ', 
@@ -845,7 +845,7 @@ class SweepEnKF(Sweep):
                 row=j+1, 
                 col=1, 
                 line_color='red', 
-                showlegend=j==0, 
+                showlegend=j == 0, 
                 opacity=0.9, 
                 legendgroup='enkf-fill', 
                 name='Ensemble mean ±σ', 
@@ -880,7 +880,7 @@ class SweepEnKF(Sweep):
                         row=1, 
                         col=2, 
                         legendgroup='EnKF', 
-                        showlegend=i==1, 
+                        showlegend=i == 1, 
                         opacity=0.3,
                         line_color=c[i],
                     )
@@ -943,7 +943,7 @@ class SweepEnKF(Sweep):
                         row=1, 
                         col=2, 
                         legendgroup='EnKF', 
-                        showlegend=(i==0), 
+                        showlegend=i == 0, 
                         line_color=c[i],
                         opacity=0.3,
                     )
