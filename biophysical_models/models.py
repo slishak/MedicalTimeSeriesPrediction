@@ -123,6 +123,7 @@ class SmithCardioVascularSystem(ODEBase):
         f_hr: Optional[Callable] = None, 
         volume_ratios: bool = False,
         v_spt_method: str = 'xitorch',
+        **kwargs,
     ):
         """Initialise.
 
@@ -140,7 +141,7 @@ class SmithCardioVascularSystem(ODEBase):
             v_spt_method (str, optional): either 'xitorch', 'newton' or 
                 'jallon'. Defaults to 'xitorch'.
         """
-        super().__init__(state_names=['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv'])
+        super().__init__(state_names=['v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv'], **kwargs)
 
         self._p_pl_is_input = p_pl_is_input
         self.volume_ratios = volume_ratios
@@ -599,15 +600,13 @@ class InertialSmithCVS(SmithCardioVascularSystem):
     (Smith, 2004), (Hann, 2004) and (Paeme, 2011)
     """
     
-    def __init__(self):
+    def __init__(self, **kwargs):
         """Initialise.
 
         Default parameter values from Paeme, 2011.
         """
-        super().__init__(state_names=[
-            'v_pa', 'v_pu', 'v_lv', 'v_ao', 'v_vc', 'v_rv', 
-            'q_mt', 'q_av', 'q_tc', 'q_pv',
-        ])
+        super().__init__(**kwargs)
+        self.state_names.extend(['q_mt', 'q_av', 'q_tc', 'q_pv'])
         # Mitral valve
         self.mt = InertialValve(convert(0.0158, 'mmHg s/ml'), convert(7.6967e-5, 'mmHg s^2/ml'))
         # Tricuspid valve
@@ -749,6 +748,7 @@ class JallonHeartLungs(ODEBase):
     def __init__(
         self, 
         f_hr: Optional[Callable] = None, 
+        **kwargs,
     ):
         """Initialise.
 
@@ -772,7 +772,7 @@ class JallonHeartLungs(ODEBase):
             resp.state_names + 
             resp_pattern.state_names
         )
-        super().__init__(state_names=state_names)
+        super().__init__(state_names=state_names, **kwargs)
         
         self.cvs = cvs
         self.resp = resp
