@@ -1,7 +1,6 @@
 from typing import Callable
 
 import torch
-import numpy as np
 
 from time_series_prediction import settings
 
@@ -103,9 +102,9 @@ class ESN:
             inp = torch.cat([torch.tensor([1.0], device=settings.device), inp])
 
         x = self.leaking_rate * self.f_activation(
-            self.input_weights @ inp
-            + self.w @ prev_state
-            + self.backprop_weights @ prev_output
+            self.input_weights @ inp +
+            self.w @ prev_state +
+            self.backprop_weights @ prev_output
         ) + (1 - self.leaking_rate) * prev_state
 
         y = torch.cat([x, inp]) @ self.output_weights
@@ -186,9 +185,9 @@ class ESN:
         # Drive network with training data
         for i in range(1, n_steps):
             x[i, :] = self.leaking_rate * self.f_activation(
-                self.input_weights @ inputs[i, :]
-                + self.w @ x[i-1, :]
-                + self.backprop_weights @ outputs[i-1, :]
+                self.input_weights @ inputs[i, :] +
+                self.w @ x[i-1, :] +
+                self.backprop_weights @ outputs[i-1, :]
             ) + (1 - self.leaking_rate) * x[i-1, :]
 
         # Ridge regression: minimise ||y - phi * w||^2_2 + alpha * ||w||^2_2
@@ -196,8 +195,8 @@ class ESN:
         y = outputs[n_discard:, :]
 
         self.output_weights = torch.linalg.solve(
-            torch.matmul(phi.T, phi) 
-            + k_l2 * torch.eye(
+            torch.matmul(phi.T, phi) +
+            k_l2 * torch.eye(
                 self.n_neurons + self.n_inputs + self.bias, device=settings.device), 
             torch.matmul(phi.T, y))
 

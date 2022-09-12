@@ -3,11 +3,13 @@ from typing import Optional
 
 from scipy import constants
 
+
 @dataclass
 class Unit:
     name: str
     value: float
     default: bool = False
+
 
 class Quantity:
     """Class to represent a physical quantity (number with unit).
@@ -124,7 +126,7 @@ class Quantity:
         else:
             return None
 
-        return conversion_numerator/conversion_denominator
+        return conversion_numerator / conversion_denominator
 
     def _convert(
         self, 
@@ -194,4 +196,3 @@ def convert(value: float, unit: Optional[str] = None, to: Optional[str] = None) 
         return q.value
     else:
         return q.to(to)
-

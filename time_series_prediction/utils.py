@@ -27,6 +27,7 @@ def param_sweep(params: list[tuple[str, list]]):
     print(f'{len(d)} simulations')
     return d
 
+
 class Sweep:
     def __init__(
         self,
@@ -295,7 +296,13 @@ class SweepESN(Sweep):
         # print(f'MAE {torch.mean(mae)} ± {torch.std(mae)}')
         # print(f'MSE {torch.mean(mse)} ± {torch.std(mse)}')
 
-        fig = self.plot_ensemble(y_esn_list, y_test_list, abs_err_list, sq_err_list, self.source or esn_kwargs.get('source'))
+        fig = self.plot_ensemble(
+            y_esn_list, 
+            y_test_list, 
+            abs_err_list, 
+            sq_err_list, 
+            self.source or esn_kwargs.get('source'),
+        )
 
         fd, fig_path = mkstemp('.json', 'esn-', self.plot_folder)
         fig.write_json(fig_path)
@@ -483,7 +490,7 @@ class SweepESN(Sweep):
             fig.update_yaxes(
                 row=i+1,
                 col=2,
-                title_text=f'Square error'
+                title_text='Square error'
             )
 
             if self.init_noise == 0:
@@ -494,12 +501,11 @@ class SweepESN(Sweep):
                     col=1,
                     line_color='black',
                     # line_dash='dash',
-                    name=f'System data',
-                    legendgroup=f'Test',
+                    name='System data',
+                    legendgroup='Test',
                     showlegend=i==0,
                 )
 
-                
                 fig.add_scatter(
                     x=t_esn,
                     y=y_esn_mean[:, i] - y_esn_std[:, i], 
@@ -518,13 +524,12 @@ class SweepESN(Sweep):
                     row=i+1, 
                     col=1, 
                     line_color='red', 
-                    showlegend=(i==0), 
+                    showlegend=i==0, 
                     opacity=0.9, 
                     legendgroup='esn-fill', 
                     name='Ensemble mean ±σ', 
                     line_width=1,
                     fillcolor='rgba(255, 0, 0, 0.2)', fill='tonexty')
-
 
                 if n_outputs == 3:
                     fig.add_scatter3d(
@@ -536,7 +541,7 @@ class SweepESN(Sweep):
                         line_color='black',
                         # line_dash='dash',
                         name=f'System data {i}',
-                        legendgroup=f'Test',
+                        legendgroup='Test',
                         showlegend=False,
                         mode='lines',
                     )
@@ -549,7 +554,7 @@ class SweepESN(Sweep):
                         line_color='black',
                         # line_dash='dash',
                         name=f'System data {i}',
-                        legendgroup=f'Test',
+                        legendgroup='Test',
                         showlegend=False,
                     )
 
@@ -704,14 +709,15 @@ class SweepEnKF(Sweep):
             ll, x = kf.log_likelihood(self.y_train, dt=1/self.resolution)
             x_enkf, y_enkf_raw = kf.predict(x[-1, :, :], self.n_test, True, False)
             x_0 = x[-1, :, :].mean(axis=0)
-            x_enkf_no_noise, y_enkf_no_noise_raw = kf.predict(x_0[None, :], self.n_test, False, False)
+            x_enkf_no_noise, y_enkf_no_noise_raw = kf.predict(
+                x_0[None, :], self.n_test, False, False)
 
         t_enkf = torch.arange(0, self.n_test) / self.resolution
 
         x_enkf_no_noise = x_enkf_no_noise[:, 0, :]
         y_enkf_no_noise_raw = y_enkf_no_noise_raw[:, 0, :]
 
-        mse, mae, sq_err, abs_err, mse_lyap, mae_lyap  = self.calc_err(y_enkf_no_noise_raw)
+        mse, mae, sq_err, abs_err, mse_lyap, mae_lyap = self.calc_err(y_enkf_no_noise_raw)
         
         y_test = (self.y_test * self.y_std) + self.y_mean
         y_enkf = (y_enkf_raw * self.y_std) + self.y_mean
@@ -761,7 +767,7 @@ class SweepEnKF(Sweep):
             row=n_subplots-1,
             col=1,
             line_color='black',
-            name=f'Abs error',
+            name='Abs error',
             showlegend=False,
         )
         fig.add_scatter(
@@ -770,7 +776,7 @@ class SweepEnKF(Sweep):
             row=n_subplots,
             col=1,
             line_color='black',
-            name=f'Square error',
+            name='Square error',
             showlegend=False,
         )
 
@@ -839,7 +845,7 @@ class SweepEnKF(Sweep):
                 row=j+1, 
                 col=1, 
                 line_color='red', 
-                showlegend=(j==0), 
+                showlegend=j==0, 
                 opacity=0.9, 
                 legendgroup='enkf-fill', 
                 name='Ensemble mean ±σ', 
@@ -874,7 +880,7 @@ class SweepEnKF(Sweep):
                         row=1, 
                         col=2, 
                         legendgroup='EnKF', 
-                        showlegend=(i==1), 
+                        showlegend=i==1, 
                         opacity=0.3,
                         line_color=c[i],
                     )

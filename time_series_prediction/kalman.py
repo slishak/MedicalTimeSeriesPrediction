@@ -3,7 +3,6 @@ from time import perf_counter
 from io import BytesIO
 
 import torch
-import numpy as np
 from plotly import graph_objects as go
 from plotly import subplots
 from torch import nn
@@ -394,7 +393,10 @@ class AD_EnKF:
         """
 
         if self._opt is None:
-            lr_lambda = lambda epoch: (epoch+1-lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
+
+            def lr_lambda(epoch):
+                return (epoch + 1 - lr_hold)**(-lr_decay) if epoch >= lr_hold else 1
+
             alpha = self.transition_function.parameters()
             beta = self.process_noise.parameters()
             if auto_scale_lr:
@@ -465,7 +467,7 @@ class AD_EnKF:
             for j in range(0, obs_train.shape[0], subseq_len):
                 ta = perf_counter()
                 self._opt.zero_grad()
-                t_0 = j*dt
+                t_0 = j * dt
                 if print_timing:
                     print(f't={t_0:.2f}s')
                 ll, x = self.log_likelihood(obs_train[j:j+subseq_len, :], x_0, dt=dt, t_0=t_0)
@@ -505,7 +507,9 @@ class AD_EnKF:
                 i_list.append(self._epoch)
                 ll_list.append(ll_sum.cpu().numpy())
                 if ll_test is not None:
-                    ll_test_list.append(ll_test.cpu().numpy() * obs_train.shape[0] / obs_test.shape[0])
+                    ll_test_list.append(
+                        ll_test.cpu().numpy() * obs_train.shape[0] / obs_test.shape[0]
+                    )
                 lambda_alpha_list.append(self._scheduler.get_last_lr()[0])
                 lambda_beta_list.append(self._scheduler.get_last_lr()[1])
                 beta_list.append(self.process_noise.param.detach().cpu().numpy()[0])

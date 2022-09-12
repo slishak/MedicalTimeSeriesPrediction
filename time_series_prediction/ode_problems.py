@@ -5,6 +5,7 @@ from numpy.typing import ArrayLike
 
 from biophysical_models.models import SmithCardioVascularSystem, InertialSmithCVS, JallonHeartLungs
 
+
 def vdp(
     t: float, 
     state: ArrayLike, 
@@ -142,7 +143,7 @@ def generate_data(
             vdp, t_range, state_0, method='RK45', dense_output=True,
             args=(2.0, 0.8, 0.3, 0.2, 0.5),
             # args=(2.0, 0, 0, 0.2, 0.5),
-            )
+        )
         
         t_out = np.linspace(t_range[0], t_range[1], n)
         x_out = sol.sol(t_out)
@@ -158,7 +159,7 @@ def generate_data(
             lorenz, t_range, state_0, method='RK45', dense_output=True,
             # args=(2.0, 0.8, 0.3, 0.2, 0.5),
             args=(28.0, 10.0, 8/3),
-            )
+        )
         
         t_out = np.linspace(t_range[0], t_range[1], n)
         x_out = sol.sol(t_out)
@@ -174,7 +175,7 @@ def generate_data(
             rossler, t_range, state_0, method='RK45', dense_output=True,
             # args=(2.0, 0.8, 0.3, 0.2, 0.5),
             args=(0.2, 0.2, 5.7),
-            )
+        )
         
         t_out = np.linspace(t_range[0], t_range[1], n)
         x_out = sol.sol(t_out)
@@ -210,6 +211,5 @@ def generate_data(
         # device=settings.device,
     )
     t_out = torch.as_tensor(t_out, dtype=torch.float32)
-
 
     return y_full, u_full, t_out

@@ -2,6 +2,7 @@ import torch
 
 device = torch.device('cpu')
 
+
 def switch_device(to: str):
     """Switch global PyTorch device setting
 

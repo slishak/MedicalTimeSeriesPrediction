@@ -70,7 +70,7 @@ def newton_raphson(
                     "The rootfinder does not converge after %d iterations. "
                     "Best |dx|=%.3e, |f|=%.3e at iter %d") % (
                         maxiter, best_dxnorm, best_ynorm, best_iter
-                    )
+                )
                 warnings.warn(ConvergenceWarning(msg))
                 x = best_x
 

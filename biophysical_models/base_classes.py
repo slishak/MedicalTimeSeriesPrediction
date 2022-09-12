@@ -121,14 +121,14 @@ class ODEBase(ABC, nn.Module):
 
     def simulate(
         self,
-        t_final: float, 
+        t_final: float,
         resolution: int,
         adjoint: bool = False,
         rtol: float = 1e-6,
         atol: float = 1e-6,
         max_step: float = 1e-2,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Simulate model. Returns regularly spaced time and state tensors. 
+        """Simulate model. Returns regularly spaced time and state tensors.
         Outputs at integration steps available in self.trajectory.
 
         Args:
@@ -149,18 +149,18 @@ class ODEBase(ABC, nn.Module):
         states = self.init_states()
         x_0 = self.ode_state_tensor(states)
 
-        t = torch.linspace(0, t_final, int(t_final*resolution + 1))
+        t = torch.linspace(0, t_final, int(t_final * resolution + 1))
         if adjoint:
             solver = odeint_adjoint
         else:
             solver = odeint
         sol = solver(
-            self, 
-            x_0, 
-            t, 
-            method='dopri5', 
-            rtol=rtol, 
-            atol=atol, 
+            self,
+            x_0,
+            t,
+            method='dopri5',
+            rtol=rtol,
+            atol=atol,
             options={'max_step': max_step},
         )
 
@@ -478,8 +478,8 @@ class CardiacDriver(nn.Module):
             torch.Tensor: e(t)
         """
 
-        t_wrapped = torch.remainder(t, 60/self.hr)
-        e = self.a * torch.exp(-self.b * (t_wrapped - 30/self.hr)**2)
+        t_wrapped = torch.remainder(t, 60 / self.hr)
+        e = self.a * torch.exp(-self.b * (t_wrapped - 30 / self.hr)**2)
 
         return e
 
@@ -487,9 +487,9 @@ class CardiacDriver(nn.Module):
 class DynamicCardiacDriver(ODEBase):
 
     def __init__(
-        self, 
-        a: float = 1.0, 
-        b: float = 80.0, 
+        self,
+        a: float = 1.0,
+        b: float = 80.0,
         hr: Callable = lambda t: torch.tensor(80.)
     ):
 

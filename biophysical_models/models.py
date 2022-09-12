@@ -1,4 +1,3 @@
-from time import perf_counter
 import warnings
 from typing import Optional, Callable, Type
 
@@ -174,13 +173,37 @@ class SmithCardioVascularSystem(ODEBase):
 
         # Pressure-volume relationships
         # Left ventricle free wall
-        self.lvf = PressureVolume(convert(454, 'kPa/l'), convert(0.005, 'l'), convert(0.005, 'l'), convert(15, '1/l'), convert(0.17, 'kPa'))
+        self.lvf = PressureVolume(
+            convert(454, 'kPa/l'), 
+            convert(0.005, 'l'), 
+            convert(0.005, 'l'), 
+            convert(15, '1/l'), 
+            convert(0.17, 'kPa'),
+        )
         # Right ventricle free wall
-        self.rvf = PressureVolume(convert(87, 'kPa/l'), convert(0.005, 'l'), convert(0.005, 'l'), convert(15, '1/l'), convert(0.16, 'kPa'))
+        self.rvf = PressureVolume(
+            convert(87, 'kPa/l'), 
+            convert(0.005, 'l'), 
+            convert(0.005, 'l'), 
+            convert(15, '1/l'), 
+            convert(0.16, 'kPa'),
+        )
         # Septum free wall
-        self.spt = PressureVolume(convert(6500, 'kPa/l'), convert(0.002, 'l'), convert(0.002, 'l'), convert(435, '1/l'), convert(0.148, 'kPa'))
+        self.spt = PressureVolume(
+            convert(6500, 'kPa/l'), 
+            convert(0.002, 'l'), 
+            convert(0.002, 'l'), 
+            convert(435, '1/l'), 
+            convert(0.148, 'kPa'),
+        )
         # Pericardium
-        self.pcd = PressureVolume(None, None, convert(0.2, 'l'), convert(30, '1/l'), convert(0.0667, 'kPa'))
+        self.pcd = PressureVolume(
+            None, 
+            None, 
+            convert(0.2, 'l'), 
+            convert(30, '1/l'), 
+            convert(0.0667, 'kPa'),
+        )
         # Vena-cava
         self.vc = PressureVolume(convert(1.5, 'kPa/l'), convert(2.83, 'l'), None, None, None)
         # Pulmonary artery
@@ -519,7 +542,7 @@ class SmithCardioVascularSystem(ODEBase):
                 self.lvf.lam * self.lvf.p_0 + 
                 self.rvf.lam * self.rvf.p_0 + 
                 self.spt.lam * self.spt.p_0)
-            v_spt = num/den
+            v_spt = num / den
         else:
             raise NotImplementedError(self._v_spt_method)
             
@@ -614,10 +637,14 @@ class InertialSmithCVS(SmithCardioVascularSystem):
                 flow rates
         """
         super().derivatives(states, outputs)
-        outputs['dq_mt_dt'] = self.mt.flow_rate_deriv(outputs['p_pu'], outputs['p_lv'], states['q_mt'])
-        outputs['dq_av_dt'] = self.av.flow_rate_deriv(outputs['p_lv'], outputs['p_ao'], states['q_av'])
-        outputs['dq_tc_dt'] = self.tc.flow_rate_deriv(outputs['p_vc'], outputs['p_rv'], states['q_tc'])
-        outputs['dq_pv_dt'] = self.pv.flow_rate_deriv(outputs['p_rv'], outputs['p_pa'], states['q_pv'])
+        outputs['dq_mt_dt'] = self.mt.flow_rate_deriv(
+            outputs['p_pu'], outputs['p_lv'], states['q_mt'])
+        outputs['dq_av_dt'] = self.av.flow_rate_deriv(
+            outputs['p_lv'], outputs['p_ao'], states['q_av'])
+        outputs['dq_tc_dt'] = self.tc.flow_rate_deriv(
+            outputs['p_vc'], outputs['p_rv'], states['q_tc'])
+        outputs['dq_pv_dt'] = self.pv.flow_rate_deriv(
+            outputs['p_rv'], outputs['p_pa'], states['q_pv'])
 
     def model(
         self, 
@@ -836,9 +863,9 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
             assert kwargs.get('f_hr') is not None, "Must use dynamic HR for BP metrics"
             super().__init__(*args, **kwargs)
 
-            self.state_names = self.state_names + [
+            self.state_names.extend([
                 'p_aod', 'p_aos', 'p_aom', 'p_vcm', 'p_pad', 'p_pas', 'p_pam',
-            ]
+            ])
 
             self.moving_avg_weight = nn.Parameter(torch.tensor(2.0), requires_grad=False)
             self.moving_avg_weight_s = nn.Parameter(torch.tensor(0.01), requires_grad=False)
@@ -856,13 +883,19 @@ def add_bp_metrics(cls: Type[ODEBase]) -> Type[ODEBase]:
             outputs = super().model(t, states)
 
             # Moving averages
-            outputs['dp_aom_dt'] = (outputs['p_ao'] - states['p_aom'])/self.moving_avg_weight
-            outputs['dp_pam_dt'] = (outputs['p_pa'] - states['p_pam'])/self.moving_avg_weight
-            outputs['dp_vcm_dt'] = (outputs['p_vc'] - states['p_vcm'])/self.moving_avg_weight
+            outputs['dp_aom_dt'] = (outputs['p_ao'] - states['p_aom']) / self.moving_avg_weight
+            outputs['dp_pam_dt'] = (outputs['p_pa'] - states['p_pam']) / self.moving_avg_weight
+            outputs['dp_vcm_dt'] = (outputs['p_vc'] - states['p_vcm']) / self.moving_avg_weight
 
             # Systolic moving average
-            dp_aos_dt = (outputs['p_ao'] - states['p_aos']) * outputs['e_t']**self.moving_avg_power_s / self.moving_avg_weight_s
-            dp_pas_dt = (outputs['p_pa'] - states['p_pas']) * outputs['e_t']**self.moving_avg_power_s / self.moving_avg_weight_s
+            dp_aos_dt = (
+                (outputs['p_ao'] - states['p_aos']) * outputs['e_t']**self.moving_avg_power_s /
+                self.moving_avg_weight_s
+            )
+            dp_pas_dt = (
+                (outputs['p_pa'] - states['p_pas']) * outputs['e_t']**self.moving_avg_power_s /
+                self.moving_avg_weight_s
+            )
             # Only update systolic moving average when volume is increasing
             outputs['dp_aos_dt'] = torch.where(
                 outputs['dv_ao_dt'] > 0,
