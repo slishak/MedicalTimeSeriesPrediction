@@ -762,15 +762,21 @@ class JallonHeartLungs(ODEBase):
         Default parameters from Smith (2007) with modifications from 
         Jallon (2009)
         """
+        
+        cvs = SmithCardioVascularSystem(p_pl_is_input=True, f_hr=f_hr, v_spt_method='jallon')
+        resp = PassiveRespiratorySystem()
+        resp_pattern = RespiratoryPatternGenerator()
+
         state_names = (
-            SmithCardioVascularSystem.state_names + 
-            PassiveRespiratorySystem.state_names + 
-            RespiratoryPatternGenerator.state_names
+            cvs.state_names + 
+            resp.state_names + 
+            resp_pattern.state_names
         )
         super().__init__(state_names=state_names)
-        self.resp_pattern = RespiratoryPatternGenerator()
-        self.resp = PassiveRespiratorySystem()
-        self.cvs = SmithCardioVascularSystem(p_pl_is_input=True, f_hr=f_hr, v_spt_method='jallon')
+        
+        self.cvs = cvs
+        self.resp = resp
+        self.resp_pattern = resp_pattern
 
         # Jallon CVS model modifications
         with torch.no_grad():

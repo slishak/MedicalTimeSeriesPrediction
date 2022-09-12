@@ -126,7 +126,7 @@ class Sweep:
         self, 
         y: torch.Tensor, 
         y_mean: Optional[torch.Tensor] = None, 
-        y_std: Optional[torch.Tensor]=None
+        y_std: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Undo standardisation of data.
 
