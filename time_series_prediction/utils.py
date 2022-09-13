@@ -1304,7 +1304,7 @@ def prepare_enkf(
         additional_states (int, optional): Number of latent states. Defaults to
             0.
         activation_function (str, optional): Either ReLU, ELU or Tanh. Defaults
-            to 'relu'.
+            to 'ReLU'.
 
     Returns:
         kalman.AD_EnKF: Initialised AD_EnKF. 
