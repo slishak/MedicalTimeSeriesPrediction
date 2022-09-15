@@ -17,7 +17,7 @@ class ESN:
         n_neurons: int = 100, 
         n_outputs: int = 1,
         n_inputs: int = 1,
-        f_activation: Callable = torch.special.expit,
+        f_activation: Callable = torch.tanh,
         bias: bool = True,
     ):
         """Initialise echo state network.
@@ -35,7 +35,7 @@ class ESN:
             n_outputs (int, optional): Number of ESN outputs. Defaults to 1.
             n_inputs (int, optional): Number of ESN inputs. Defaults to 1.
             f_activation (Callable, optional): Activation function. Defaults to
-                torch.special.expit.
+                torch.tanh.
             bias (bool, optional): Whether to use a bias term. Defaults to 
                 True.
         """
@@ -194,7 +194,7 @@ class ESN:
                 self.backprop_weights @ outputs[i-1, :]
             ) + (1 - self.leaking_rate) * x[i-1, :]
 
-        # Ridge regression: minimise ||y - phi * w||^2_2 + alpha * ||w||^2_2
+        # Ridge regression: minimise ||y - phi * w||^2_2 + k * ||w||^2_2
         phi = torch.cat((x, inputs), 1)[n_discard:, :]
         y = outputs[n_discard:, :]
 
