@@ -553,6 +553,7 @@ class SweepESN(Sweep):
                     name=f'ESN {i}',
                     legendgroup=f'ESN {i}',
                     showlegend=False,
+                    opacity=0.3,
                 )
                 if self.init_noise != 0:
                     fig.add_scatter(
@@ -565,6 +566,7 @@ class SweepESN(Sweep):
                         name=f'System data {i}',
                         legendgroup=f'ESN {i}',
                         showlegend=False,
+                        opacity=0.3,
                     )
                 # fig.add_scatter(
                 #     # x=t_esn,
@@ -758,6 +760,7 @@ class SweepESN(Sweep):
                 fig.update_xaxes(title_text=r'$\frac{dx}{dt}$', col=2)
                 fig.update_yaxes(title_text='x', col=2)
 
+        fig.update_xaxes(title_text='t', col=1, row=n_outputs+2)
         fig.update_yaxes(
             row=n_outputs+1,
             col=1,
@@ -1124,7 +1127,7 @@ class SweepEnKF(Sweep):
             # fig.add_vline(x=n_train, row=j+1, col=1)
 
         fig.update_layout(hovermode='x', height=800)
-        fig.update_xaxes(title_text='t', col=1)
+        fig.update_xaxes(title_text='t', col=1, row=n_subplots)
 
         if n_outputs == 3:
             if show_ensemble:
