@@ -32,7 +32,7 @@ The [`examples`](examples) folder contains various Python scripts and Jupyter no
 }
 ```
 
-The example scripts are not documented in as detail as the implementation packages. Some key example scripts are:
+The example scripts are not documented in as much detail as the implementation packages. Some key example scripts are:
 - [`cvs_example.py`](examples/cvs_example.py): Simulate a cardiovascular system ODE model. Requires some commenting/uncommenting to choose the type of simulation to run.
 - [`esn_hyperparameter_sweep.ipynb`](examples/esn_hyperparameter_sweep.ipynb) runs a large sweep of Echo State Networks on the example ODE problems with varied hyperparameters, and plots the results.
 - [`esn_hyperparameter_sweep_jallon.ipynb`](examples/esn_hyperparameter_sweep_jallon.ipynb) does the same but using data from the Jallon heart-lung model
