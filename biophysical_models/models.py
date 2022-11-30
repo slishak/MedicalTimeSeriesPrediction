@@ -781,7 +781,7 @@ class JallonHeartLungs(ODEBase):
         # Jallon CVS model modifications
         with torch.no_grad():
             # Table 2 of Jallon 2009
-            self.cvs.spt.e_es.copy_(torch.tensor(convert(3750, 'mmHg/l')))  # Wrong units in paper
+            self.cvs.spt.e_es.copy_(torch.tensor(convert(3750, 'mmHg/l')))
             self.cvs.spt.lam.copy_(torch.tensor(convert(35, '1/l')))
             self.cvs.vc.e_es.copy_(torch.tensor(convert(2, 'mmHg/l')))
             # # HR = 54bpm

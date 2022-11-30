@@ -67,13 +67,13 @@ paeme_2011_cvs = {
     'pul.r': tensor(convert(0.1552, 'mmHg s/ml')),  # from .m file, absent from Paeme 2011?
     'sys.r': tensor(convert(1.0889, 'mmHg s/ml')),  # from .m file, absent from Paeme 2011?
 
-    'lvf.e_es': tensor(convert(2.8798, 'mmHg s/ml')),
-    'rvf.e_es': tensor(convert(0.5850, 'mmHg s/ml')),
-    'spt.e_es': tensor(convert(48.7540, 'mmHg s/ml')),
-    'vc.e_es': tensor(convert(0.0059, 'mmHg s/ml')),
-    'pa.e_es': tensor(convert(0.3690, 'mmHg s/ml')),
-    'pu.e_es': tensor(convert(0.0073, 'mmHg s/ml')),
-    'ao.e_es': tensor(convert(0.6913, 'mmHg s/ml')),  # 0.0 in Paeme 2011?
+    'lvf.e_es': tensor(convert(2.8798, 'mmHg/ml')),
+    'rvf.e_es': tensor(convert(0.5850, 'mmHg/ml')),
+    'spt.e_es': tensor(convert(48.7540, 'mmHg/ml')),
+    'vc.e_es': tensor(convert(0.0059, 'mmHg/ml')),
+    'pa.e_es': tensor(convert(0.3690, 'mmHg/ml')),
+    'pu.e_es': tensor(convert(0.0073, 'mmHg/ml')),
+    'ao.e_es': tensor(convert(0.6913, 'mmHg/ml')),  # 0.0 in Paeme 2011?
 
     'lvf.v_d': tensor(0.0),
     'rvf.v_d': tensor(0.0),
